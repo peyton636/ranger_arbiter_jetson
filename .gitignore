@@ -1,0 +1,34 @@
+# colcon / ROS2 workspace artifacts
+build/
+install/
+log/
+src/build/
+src/install/
+src/log/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Editor / local
+.config
+fishros
+*.swp
+*~
+.DS_Store
+
+# Vendored clones (track separately; use submodule if needed)
+src/ranger_ros2/
+src/ugv_sdk/
+
+# Kernel module build artifacts
+*.ko
+*.o
+*.mod
+*.mod.c
+*.mod.o
+Module.symvers
+modules.order
+*.cmd
