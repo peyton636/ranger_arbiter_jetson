@@ -11,6 +11,8 @@ Legacy 仅见协议附录 A，不得与新 V3 混用。
 
 **STM32B 固件对照：** [STM32B_FIRMWARE_NOTES.md](./STM32B_FIRMWARE_NOTES.md)
 
+**GPS 模块联调（`GPS.py` + CH340 驱动）：** 见本文末尾 [GPS 模块联调](#gps-模块联调gpspy--ch340-驱动) 章节；ROS2 驱动见同章 [§8.3 ROS2 移植总览](#83-ros2-移植总览方案-c已实现)。
+
 ---
 
 ## Jetson ↔ STM32B RS232 数据流（接收 / 解析 / 控制）
@@ -778,3 +780,519 @@ pkill -f "jetson_bridge" 2>/dev/null
 pkill -f "teleop_twist_keyboard" 2>/dev/null
 pkill -f "ros2 topic pub" 2>/dev/null
 ```
+
+---
+
+## GPS 模块联调（GPS.py + CH340 驱动）
+
+在 Jetson Nano / Ubuntu 22.04 上运行 `src/GPS.py` 读取 GPS 模块时遇到的问题与解决办法。
+
+**环境：** 内核 `5.15.185-tegra`、GPS USB 通讯（CH340 `1a86:7523`）、波特率 **9600**。
+
+| 文件 | 说明 |
+|------|------|
+| `src/GPS.py` | 厂商例程：解析 `$GNGGA` / `$GNVTG` 并打印经纬度 |
+| `~/install_ch341_driver.sh` | 一键编译、加载 CH341 驱动并处理 brltty 占用 |
+
+### 本机 USB 串口对应关系
+
+| 设备 | 端口 | 稳定路径（推荐） |
+|------|------|------------------|
+| Quectel RM500U 5G 模组 | `ttyUSB0`～`ttyUSB4` | `usb-Quectel_RM500U-CNV_...` |
+| STM32B 桥接（Prolific PL2303） | `ttyUSB5` | `usb-Prolific_Technology_Inc._USB-Serial_Controller-if00-port0` |
+| **GPS 模块（CH340）** | `1-2.2.4` → 通常 `ttyUSB6` | `/dev/gps_usb` 或 by-id（见下） |
+| **IMU 模块（CH340）** | `1-2.2.3` → 通常 `ttyUSB6`/`ttyUSB7` | **`/dev/imu_usb`（推荐）** |
+
+两块 CH340 的 by-id 名称相同（`usb-1a86_USB_Serial-if00-port0`），**不能**靠 by-id 区分 GPS/IMU，请用 udev 别名 `/dev/gps_usb`、`/dev/imu_usb`（§8.3.1）。
+
+```bash
+lsusb -t          # 看 Driver=ch341 在哪几个 Port
+ls -l /dev/serial/by-id/
+ls -l /dev/gps_usb /dev/imu_usb 2>/dev/null
+ls /dev/ttyUSB*
+```
+
+### 问题总览
+
+| # | 现象 | 根因 | 解决办法 |
+|---|------|------|----------|
+| 1 | `GPS Serial Opened!` 但从不打印 | `GPS.py` 连错端口（`ttyUSB0` 是 5G 模组） | 改端口，见下 |
+| 2 | `lsusb` 有 CH340，但无 GPS 串口 | 内核未内置 CH341 驱动 | 编译加载驱动 |
+| 3 | `git clone` 报 Repository not found | GitHub 地址错误或失效 | 用 WCH 官方仓库 |
+| 4 | 编译报 `__dynamic_dev_dbg undefined` | Jetson 内核与 out-of-tree 模块不兼容 | 去掉 `dev_dbg` 等 |
+| 5 | `insmod: Invalid module format` | 用错内核头文件编译 | 用 L4T 官方 headers |
+| 6 | 驱动已加载仍无串口 | **brltty** 占用 CH340（`usbfs`） | mask brltty 并重新绑定 |
+| 7 | 循环 `GPS no found` | 室内无卫星，非程序故障 | 室外等搜星；ROS2 见 §8.3.1 |
+| 8 | `gps_ws`/`imu_ws` 目录错乱 / 无法在本 workspace 编译 | 嵌套进 catkin_ws + 教程是 ROS1 Melodic | 已移至 `~/gps_ws`、`~/imu_ws`，见 §8 |
+| 9 | `ros2 topic echo` 报 `!rclpy.ok()` | `ros2 daemon` 状态异常（如 Ctrl+C 强退节点） | `ros2 daemon stop && ros2 daemon start` |
+| 10 | `ros2 topic echo /fix` 一直无输出 | 串口被占用或未收到完整 NMEA 行 | 见 §8.3.1；确认 launch 在跑且串口有 `$GNGGA` |
+| 11 | IMU 报 `/dev/imu_usb` 不存在 | udev 未装 + IMU 的 CH340 未绑定 ch341 | 见 §8.3.1 IMU 两步 |
+
+### 问题 1：串口能打开，但不循环打印
+
+```bash
+cd ~/catkin_ws/src && python3 GPS.py
+# GPS Serial Opened! Baudrate=9600
+# 之后无输出（连错口时）或循环 GPS no found（连对口但室内时）
+```
+
+也可：`python3 ~/catkin_ws/src/GPS.py`
+
+原因：`GPS.py` 原先写死 `/dev/ttyUSB0`，本机是 Quectel 5G 模组，无 `$GNGGA` 数据。
+
+解决（已改）：
+
+```python
+ser = serial.Serial("/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0", 9600)
+```
+
+验证：
+
+```bash
+python3 -c "
+import serial, time
+s = serial.Serial('/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0', 9600, timeout=2)
+time.sleep(2)
+print(s.read(300).decode('ascii', 'replace'))
+s.close()
+"
+```
+
+应看到 `$GNGGA`、`$GNRMC`、`$GPTXT,...,ANTENNA OK` 等。
+
+### 问题 2 & 3：没有 GPS 串口 / Git 克隆失败
+
+`lsusb` 可见 `1a86:7523`，但无对应 `ttyUSB`；内核 `CONFIG_USB_SERIAL_CH341 is not set`。
+
+错误仓库（不存在）：
+
+```bash
+git clone https://github.com/juliagoda/CH341SER_LINUX.git   # 失败
+git clone https://github.com/ihaolin/ch341ser_linux.git     # 失败
+```
+
+正确做法：
+
+```bash
+GIT_TERMINAL_PROMPT=0 git clone --depth 1 https://github.com/WCHSoftGroup/ch341ser_linux.git
+bash ~/install_ch341_driver.sh
+```
+
+### 问题 4：编译报 `__dynamic_dev_dbg undefined`
+
+用 `/home/rxp/nvidia/Linux_for_Tegra/source/kernel` 编译时出现。Jetson 内核未导出该调试符号。
+
+`install_ch341_driver.sh` 编译前会自动去掉 `dev_dbg(...)` 和 `usb_serial_debug_data(...)`。
+
+### 问题 5：`insmod: Invalid module format`
+
+`vermagic` 相同但 **Module.symvers CRC 不一致**：
+
+| 编译用的内核树 | `module_layout` CRC | 能否加载 |
+|----------------|---------------------|----------|
+| `nvidia/Linux_for_Tegra/source/kernel` | `0x25f8bfc1` | 否 |
+| L4T 官方 headers（见下） | `0x24d702c7` | 是 |
+
+**必须用 L4T 官方内核头编译：**
+
+```text
+/usr/src/linux-headers-5.15.185-tegra-ubuntu22.04_aarch64/3rdparty/canonical/linux-jammy/kernel-source/
+```
+
+`ch341.c` 从 NVIDIA 内核树复制：`nvidia/Linux_for_Tegra/source/kernel/drivers/usb/serial/ch341.c`
+
+```bash
+sudo modprobe usbserial
+sudo insmod ~/ch341-driver-build/driver/ch341.ko
+```
+
+### 问题 6：驱动已加载，仍无 GPS/IMU 串口（brltty 占用或未 bind）
+
+```bash
+# 查看 CH340 是否被 brltty 占用（Driver 为空或 usbfs）
+readlink -f /sys/bus/usb/devices/1-2.2.3:1.0/driver   # IMU
+readlink -f /sys/bus/usb/devices/1-2.2.4:1.0/driver   # GPS
+# 若为 /sys/bus/usb/drivers/usbfs → 被 brltty 占用
+```
+
+Ubuntu **brltty** 盲文服务把 CH340 当盲文显示器占用（规则：`/lib/udev/rules.d/85-brltty.rules`）。
+
+解决：
+
+```bash
+sudo systemctl stop brltty-udev.service
+sudo systemctl mask brltty-udev.service brltty.service
+
+# 从 usbfs 解绑（若占用），再绑到 ch341（注意：用 ch341/bind，不是 ch341-uart/bind）
+echo '1-2.2.3:1.0' | sudo tee /sys/bus/usb/drivers/usbfs/unbind
+echo '1-2.2.4:1.0' | sudo tee /sys/bus/usb/drivers/usbfs/unbind
+echo '1-2.2.3:1.0' | sudo tee /sys/bus/usb/drivers/ch341/bind
+echo '1-2.2.4:1.0' | sudo tee /sys/bus/usb/drivers/ch341/bind
+
+# 或一键处理两块 CH340：
+bash ~/install_ch341_driver.sh
+```
+
+若失败，mask brltty 后**重新拔插**对应模块。成功后：
+
+```bash
+ls -l /dev/gps_usb /dev/imu_usb
+ls /dev/serial/by-id/ | grep 1a86   # 两块都插时应看到两个口
+```
+
+### 问题 7：循环打印 `GPS no found`
+
+程序与串口已正常。表示收到 `$GNGGA` 但无有效定位（室内/无卫星）：
+
+```text
+$GPTXT,...,ANTENNA OK*35
+$GNGGA,,,,,,0,00,25.5,...    ← 经纬度为空
+$GNRMC,,V,...               ← V = 无效
+```
+
+解决：室外开阔处等 30 秒～2 分钟搜星，再运行 `python3 GPS.py`。
+
+**ROS2 `ds_gps_driver` 等价行为：** 室内仍会约 **1 Hz** 发布 `/fix`，但 `status=-1`（`NO_FIX`），经纬度为 `nan`——表示串口与解析正常，只是尚未定位。launch 终端每 10 秒会打印一条状态日志。
+
+```bash
+# 终端 1：保持运行
+source /opt/ros/humble/setup.bash
+source ~/catkin_ws/install/setup.bash
+ros2 launch ds_gps_driver gps_serial.launch.py
+
+# 终端 2：查看（命令中 topic 与 echo 之间要有空格）
+source /opt/ros/humble/setup.bash
+source ~/catkin_ws/install/setup.bash
+ros2 topic echo /fix --once
+ros2 topic hz /fix
+```
+
+室内典型输出：
+
+```yaml
+status:
+  status: -1          # NO_FIX
+latitude: .nan
+longitude: .nan
+```
+
+室外定位成功后 `status` 变为 `0` 或更高，并出现有效经纬度。
+
+### 问题 8：gps_ws / imu_ws 目录与 Ubuntu 版本不对应
+
+#### 8.1 目录结构（已整理）
+
+厂商教程要求 **两个独立 ROS1 工作空间**，放在主目录，**不要**嵌套进 `catkin_ws/src/`。
+
+**错误（已清理）：**
+
+```text
+~/catkin_ws/src/gps_ws/src/nmea_navsat_driver/   ← 嵌套了两层 workspace
+~/catkin_ws/src/imu_ws/src/                      ← 同上
+```
+
+**正确（当前布局）：**
+
+```text
+~/gps_ws/
+  bind_usb.sh
+  gps_usb.rules
+  src/
+    nmea_navsat_driver/
+    nmea_msgs-master/
+    gps_goal/
+    imu_gps_localization-master/
+    CMakeLists.txt          ← catkin 工作空间需要（Melodic 环境下创建）
+
+~/imu_ws/
+  bind_usb.sh
+  imu_usb.rules
+  src/
+    package.xml             ← wit_ros_imu 包
+    scripts/wit_normal_ros.py
+    launch/rviz_and_imu.launch
+    rviz/
+    CMakeLists.txt          ← Melodic 环境下创建
+
+~/catkin_ws/src/            ← 本工程 ROS2 Humble
+  ds_jetson_bridge/
+  ds_serial_monitor/
+  ds_gps_driver/            ← ROS2 GPS 驱动
+  ds_imu_driver/            ← ROS2 IMU 驱动
+  ds_imu_gps_localization/  ← ROS2 IMU+GPS 融合（Python EKF）
+  ds_gps_goal/              ← ROS2 经纬度→Nav2 目标
+  GPS.py                    ← 纯 Python 例程，调试用
+  ranger_ros2/
+  ugv_sdk/
+```
+
+#### 8.2 版本不对应（核心矛盾）
+
+| 项目 | 厂商教程 | 本机现状 |
+|------|----------|----------|
+| 操作系统 | Ubuntu **18.04** | Ubuntu **22.04** |
+| ROS | **Melodic**（ROS1） | **Humble**（ROS2） |
+| 编译 | `catkin_make` | `colcon build` |
+| 启动 | `roslaunch` / `rospy` | `ros2 launch` / `rclpy` |
+
+`gps_ws`、`imu_ws` 里的包**不能**在 `catkin_ws` 里用 `colcon build` 编译，也**不能**在本机 Ubuntu 22.04 上直接 `apt install ros-melodic-*`（Melodic 只支持 18.04）。
+
+| 阶段 | 做什么 | 用什么 |
+|------|--------|--------|
+| **硬件验证** | 跑 `GPS.py`、读 NMEA | Python + CH341 驱动 |
+| **IMU/GPS 融合**（已实现） | 发布 `/fused_path` | `ds_imu_gps_localization` |
+| **经纬度导航**（已实现） | GPS 目标 → Nav2 | `ds_gps_goal` |
+
+#### 8.3 ROS2 移植总览（方案 C，已实现）
+
+| ROS1 厂商包 | ROS2 本工程 | 话题 / 功能 |
+|-------------|-------------|-------------|
+| `nmea_navsat_driver` | `ds_gps_driver` | `/fix`、`/vel` |
+| `wit_ros_imu` | `ds_imu_driver` | `/imu/data`、`/imu/mag` |
+| `imu_gps_localization` | `ds_imu_gps_localization` | `/fused_path`（EKF 融合轨迹） |
+| `gps_goal` | `ds_gps_goal` | 订阅 `/gps_goal_fix`，发送 Nav2 目标 |
+
+**编译：**
+
+```bash
+cd ~/catkin_ws
+source /opt/ros/humble/setup.bash
+colcon build --packages-select ds_gps_driver ds_imu_driver ds_imu_gps_localization ds_gps_goal --symlink-install
+source install/setup.bash
+```
+
+**依赖（若缺）：**
+
+```bash
+sudo apt install ros-humble-nav2-msgs python3-geographiclib
+```
+
+#### 8.3.1 驱动节点
+
+**环境（每个新终端都要 source）：**
+
+```bash
+source /opt/ros/humble/setup.bash
+source ~/catkin_ws/install/setup.bash
+```
+
+**只启动 GPS：**
+
+```bash
+ros2 launch ds_gps_driver gps_serial.launch.py port:=/dev/gps_usb
+```
+
+默认 launch 参数为 by-id，**两块 CH340 同时插入时 by-id 无法区分**，请显式指定 `/dev/gps_usb`（见上表）。
+
+**只启动 IMU：**
+
+```bash
+ros2 launch ds_imu_driver imu_serial.launch.py port:=/dev/imu_usb
+```
+
+本机 **GPS 与 IMU 均为 CH340（`1a86:7523`）**，接在不同 USB 口上：
+
+| 设备 | USB 路径 | tty | 稳定别名 |
+|------|----------|-----|----------|
+| GPS | `1-2.2.4` | 两块都插时多为 `ttyUSB6` | `/dev/gps_usb` |
+| IMU | `1-2.2.3` | 仅插 IMU 时常为 `ttyUSB6` | `/dev/imu_usb` |
+
+> **只插一个 CH340 时** by-id 也会是 `usb-1a86_USB_Serial-if00-port0`，请用 `ls -l /dev/imu_usb` 确认，勿把 IMU 口当 GPS 默认 launch。
+
+**首次使用 IMU 须做两步（需 sudo）：**
+
+```bash
+# 1) 绑定 IMU 的 CH340 到 ch341 驱动
+#    注意：本机 ch341-uart/ 下没有 bind 文件，须用 usb/drivers/ch341/bind
+echo '1-2.2.3:1.0' | sudo tee /sys/bus/usb/drivers/ch341/bind
+
+# 若报 Permission denied，先检查是否被 brltty 占用：
+readlink -f /sys/bus/usb/devices/1-2.2.3:1.0/driver
+# 若为 .../usbfs → 先 unbind 再 bind：
+echo '1-2.2.3:1.0' | sudo tee /sys/bus/usb/drivers/usbfs/unbind
+echo '1-2.2.3:1.0' | sudo tee /sys/bus/usb/drivers/ch341/bind
+
+# 或一键绑定两块 CH340（GPS + IMU）：
+bash ~/install_ch341_driver.sh
+
+# 2) 安装 udev 规则（按 USB 口区分 GPS/IMU）
+sudo cp ~/imu_ws/imu_usb.rules /etc/udev/rules.d/
+sudo udevadm control --reload-rules && sudo udevadm trigger
+
+# 验证
+ls -l /dev/imu_usb /dev/gps_usb /dev/ttyUSB*
+ls -l /dev/serial/by-id/ | grep 1a86
+```
+
+若绑定后仍无 `/dev/imu_usb`，**重新拔插 IMU** 再查。临时可不用别名（**以 `ls -l /dev/imu_usb` 指向的 tty 为准**）：
+
+```bash
+ros2 launch ds_imu_driver imu_serial.launch.py port:=/dev/ttyUSB6
+# 或 by-path（口 1-2.2.3）：
+ros2 launch ds_imu_driver imu_serial.launch.py \
+  port:=/dev/serial/by-path/platform-3610000.usb-usb-0:2.2.3:1.0-port0
+```
+
+**GPS + IMU 一起：**
+
+```bash
+ros2 launch ds_gps_driver gps_imu.launch.py \
+  gps_port:=/dev/gps_usb imu_port:=/dev/imu_usb
+```
+
+（`gps_imu.launch.py` 也支持分别 override `gps_port` / `imu_port`。）
+
+**查看数据（须双终端：终端 1 保持 launch 运行，终端 2 查看）：**
+
+```bash
+# GPS
+ros2 topic echo /fix
+ros2 topic echo /fix --once      # 只看一条
+ros2 topic hz /fix               # 室内约 1 Hz
+
+# IMU（命令中 topic 与 echo/hz 之间要有空格）
+ros2 topic echo /imu/data
+ros2 topic echo /imu/data --once
+ros2 topic hz /imu/data           # 约 10 Hz
+```
+
+**常见问题：**
+
+| 现象 | 处理 |
+|------|------|
+| `ros2 topic echo` 报 `!rclpy.ok()` | `ros2 daemon stop && ros2 daemon start` 后重试 |
+| echo 一直无输出 | 确认终端 1 的 launch **仍在运行**（勿 Ctrl+C）；`ros2 node list` 应有对应 driver 节点 |
+| 需读原始 NMEA | 先 `Ctrl+C` 停 GPS launch（串口独占），再 `timeout 5 cat /dev/gps_usb` 或 by-id |
+| 室内 `/fix` 为 `status: -1`、经纬度 `nan` | **正常**，见上文「问题 7」 |
+| IMU 报 `No such file: /dev/imu_usb` | 见上文 IMU 两步：绑定 `1-2.2.3` + 安装 udev |
+| `ch341-uart/bind: Permission denied` | 本机无此文件，改用 `/sys/bus/usb/drivers/ch341/bind` |
+| `/imu/data` 无数据但串口已打开 | 确认 launch 未退出；`ros2 topic hz /imu/data` 应约 10 Hz |
+
+#### 8.3.2 IMU/GPS 融合（替代 `imu_gps_test.launch`）
+
+等价于厂商 `roslaunch imu_gps_localization imu_gps_test.launch`：
+
+```bash
+# 一条命令：GPS 驱动 + IMU 驱动 + 融合节点
+ros2 launch ds_imu_gps_localization imu_gps_test.launch.py
+```
+
+或已有 `/fix`、`/imu/data` 时只开融合：
+
+```bash
+ros2 launch ds_imu_gps_localization imu_gps_fusion.launch.py
+ros2 topic echo /fused_path
+```
+
+**源码：** C++ EKF 已用 Python/Numpy 重写：
+- `ds_imu_gps_localization/imu_gps_localizer.py` — 核心 EKF
+- `ds_imu_gps_localization/localization_node.py` — ROS2 订阅/发布
+
+#### 8.3.3 经纬度导航（替代 `gps_goal`）
+
+等价于厂商 `roslaunch gps_goal gps_goal.launch`（ROS2 使用 **Nav2** 替代 move_base）：
+
+```bash
+# 终端 1：Nav2 导航栈（需已有地图）
+ros2 launch ds_gps_goal gps_goal.launch.py
+
+# 终端 2：设置地图原点经纬度（我在哪）
+# 注意：PoseStamped 里 position.x=纬度，position.y=经度（与厂商 gps_goal 约定一致）
+ros2 topic pub --once /local_xy_origin geometry_msgs/PoseStamped \
+  "{header: {frame_id: 'map'}, pose: {position: {x: 22.578850, y: 113.918636, z: 0.0}}}"
+
+# 终端 3：发送 GPS 目标点（我去哪）
+ros2 topic pub --once /gps_goal_fix sensor_msgs/NavSatFix \
+  "{latitude: 22.578854, longitude: 113.918640, altitude: 0.0}"
+```
+
+节点会把经纬度换算成 map 坐标系下的 `(x,y)`，通过 Nav2 `navigate_to_pose` 发目标。若无 Nav2，设 `use_nav2:=false` 则只发布 `/goal_pose`。
+
+**源码：** `ds_gps_goal/gps_goal_node.py`（由厂商 Python 版 `gps_goal.py` 移植）
+
+#### 8.3.4 源码位置
+
+| 包 | 节点 | 源文件 |
+|----|------|--------|
+| `ds_gps_driver` | `gps_serial` | `gps_serial_node.py` |
+| `ds_imu_driver` | `wit_imu` | `wit_imu_node.py` |
+| `ds_imu_gps_localization` | `imu_gps_localization` | `localization_node.py` + `imu_gps_localizer.py` |
+| `ds_gps_goal` | `gps_goal` | `gps_goal_node.py` |
+
+#### 8.4 备选：仍用 ROS1 厂商包（Docker / 虚拟机）
+
+若需完全复现厂商 `roslaunch imu_gps_test.launch`，可用 Docker 跑 Melodic 并挂载 `~/gps_ws`、`~/imu_ws`（见原方案 A/B，略）。
+
+#### 8.5 本机 ROS2 工程编译
+
+**仅 Jetson 桥接：**
+
+```bash
+cd ~/catkin_ws
+source /opt/ros/humble/setup.bash
+colcon build --packages-select ds_jetson_bridge --symlink-install
+source install/setup.bash
+```
+
+**GPS / IMU 相关包（与 §8.3 相同）：**
+
+```bash
+colcon build --packages-select ds_gps_driver ds_imu_driver ds_imu_gps_localization ds_gps_goal --symlink-install
+source install/setup.bash
+```
+
+### 开机持久化
+
+```bash
+sudo cp ~/ch341-driver-build/driver/ch341.ko \
+  /lib/modules/$(uname -r)/kernel/drivers/usb/serial/
+sudo depmod -a
+echo ch341 | sudo tee /etc/modules-load.d/ch341.conf
+sudo systemctl mask brltty-udev.service brltty.service
+```
+
+内核升级后重新执行：`bash ~/install_ch341_driver.sh`
+
+### 完整操作流程
+
+**硬件验证（纯 Python，不依赖 ROS）：**
+
+```bash
+bash ~/install_ch341_driver.sh
+ls /dev/serial/by-id/ | grep 1a86
+cd ~/catkin_ws/src && python3 GPS.py
+```
+
+**ROS2 驱动（推荐）：**
+
+```bash
+cd ~/catkin_ws
+source /opt/ros/humble/setup.bash
+colcon build --packages-select ds_gps_driver ds_imu_driver --symlink-install
+source install/setup.bash
+
+# GPS（室外）
+ros2 launch ds_gps_driver gps_serial.launch.py port:=/dev/gps_usb
+# 另开终端：ros2 topic echo /fix --once
+
+# IMU
+ros2 launch ds_imu_driver imu_serial.launch.py port:=/dev/imu_usb
+# 另开终端：ros2 topic echo /imu/data --once
+```
+
+### 故障速查
+
+| 检查项 | 命令 | 期望 |
+|--------|------|------|
+| USB 识别 | `lsusb \| grep 1a86` | `1a86:7523` |
+| 驱动加载 | `lsmod \| grep ch341` | 有 `ch341` |
+| brltty | `systemctl is-active brltty-udev` | `inactive` / `masked` |
+| GPS 节点 | `ls /dev/serial/by-id/ \| grep 1a86` | `usb-1a86_USB_Serial-if00-port0` |
+| 是否定位 | `$GNGGA` fix quality 字段 | `0`=未定位，`1+`=已定位 |
+| ROS2 节点 | `ros2 node list` | 有 `/gps_serial_driver` |
+| ROS2 话题 | `ros2 topic hz /fix` | 室内约 1 Hz；无输出则查 launch / 串口 |
+| IMU 话题 | `ros2 topic hz /imu/data` | 约 10 Hz；launch 须保持运行 |
+| daemon 异常 | `ros2 daemon stop && ros2 daemon start` | 修复 `!rclpy.ok()` |
+
+运行 `GPS.py` 与 `jetson_bridge` 互不干扰（不同 USB 设备）；勿与 STM32B 的 `ttyUSB5`、5G 模组 `ttyUSB0~4` 混淆。
+
