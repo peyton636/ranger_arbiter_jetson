@@ -2,3 +2,25 @@
 build/
 install/
 log/
+
+# Vendored third-party (clone locally, do not commit)
+src/drivers/ranger_ros2/
+src/drivers/ugv_sdk/
+
+# Python / colcon artifacts under src
+src/**/build/
+src/**/install/
+src/**/log/
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Kernel module build (ds_serial_monitor pl2303)
+*.ko
+*.o
+*.mod
+*.mod.c
+*.mod.o
+Module.symvers
+modules.order
+*.cmd

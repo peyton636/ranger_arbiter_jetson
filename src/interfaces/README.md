@@ -11,8 +11,14 @@ GripperStatus: 夹爪开口宽度、夹持力及驱动器健康状态
 # cali_msgs
 
 
-# can_msgs
+# jetson_can_msgs
 
+Jetson ↔ STM32B 解析后 CAN 消息（V3Status、GpsFrameA/B/C 等）。  
+**注意**：原始 CAN 帧 `/can/frame` 使用系统包 `ros-humble-can-msgs`，不是本包。
+
+# scr_sensor
+
+AGV 业务层消息：`VehicleData`（`/vehicle/vehicle_data`）、后续 `NavState` 等。
 
 # geometry_msgs
 ROS2 robot built-in msgs file
@@ -28,9 +34,6 @@ ROS2 robot built-in msgs file
 
 # orbbec_camera_msgs
 orbbec_camera_msg
-
-# scr_sensor
-
 
 # sensor_msgs
 ROS2 robot built-in msgs file

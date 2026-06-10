@@ -1,3 +1,8 @@
-# navigation_pkg
-放 nav_manager_node 和导航相关适配层。
-原则：对 Nav2 做一层业务封装，不让任务层直接依赖 Nav2 细节。
+# navigation
+
+导航与定位相关功能包。
+
+| 包 | 说明 |
+|----|------|
+| `ds_imu_gps_localization` | IMU + GPS EKF 融合（`/fused_path`） |
+| `ds_gps_goal` | 经纬度 → Nav2 导航目标 |
