@@ -1,0 +1,17 @@
+#pragma once
+// generated from rosidl_adapter/resource/msg.idl.em
+// with input from cali_msgs/msg/CaliMsg.msg
+// generated code does not contain a copyright notice
+
+#include "cali_msgs/msg/Header.idl"
+
+module cali_msgs {
+  module msg {
+    typedef uint8 uint8__64[64];
+    struct CaliMsg {
+      cali_msgs::msg::Header header;
+
+      uint8__64 payload;
+    };
+  };
+};

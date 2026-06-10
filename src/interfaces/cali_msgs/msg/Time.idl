@@ -1,0 +1,15 @@
+#pragma once
+// generated from rosidl_adapter/resource/msg.idl.em
+// with input from cali_msgs/msg/Time.msg
+// generated code does not contain a copyright notice
+
+
+module cali_msgs {
+  module msg {
+    struct Time {
+      uint32 sec;
+
+      uint32 nanosec;
+    };
+  };
+};
