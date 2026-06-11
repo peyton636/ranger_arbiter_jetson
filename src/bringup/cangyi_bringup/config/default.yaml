@@ -1,0 +1,20 @@
+cangyi_bringup:
+  ros__parameters:
+    mode: control
+    namespace: ''
+    can_port: can0
+    arm_type: piper
+    effector_type: none
+    revo2_type: left
+    auto_enable: true
+    fast_mode: false
+    speed_percent: 100
+    pub_rate: 200
+    enable_timeout: 5.0
+    tcp_offset: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    gripper_default_effort: 1.0
+    follow: true
+    feedback_topic: feedback/joint_states
+    control_topic: control/joint_states
+    auto_control_gate: false
+    control_gate_service: control_enable

@@ -1,0 +1,15 @@
+[Unit]
+Description=Cangyi Robot Bringup
+After=network-online.target
+
+[Service]
+Type=simple
+User=<robot_user>
+WorkingDirectory=<workspace_dir>
+ExecStart=/bin/bash <workspace_dir>/deploy/scripts/start_cangyi_bringup.sh <workspace_dir> control can0 piper none
+Restart=always
+RestartSec=2
+Environment=RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+
+[Install]
+WantedBy=multi-user.target

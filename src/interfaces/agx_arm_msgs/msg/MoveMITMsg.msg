@@ -1,8 +1,19 @@
-# This message contains the joint position, velocity, and torque control values for a single joint.
+# MIT 模式单关节/多关节力矩控制命令
+# 话题: /control/move_mit
+# 基于阻抗控制框架，同时指定位置、速度、PD 增益与期望力矩，实现柔顺力控
+# 所有数组字段长度必须与 joint_index 一致，支持一次控制多个关节
 
-int32[] joint_index     # Index of the joint to control
-float64[] p_des         # Desired joint position in radians
-float64[] v_des         # Desired joint velocity in radians/second
-float64[] kp            # Position gain
-float64[] kd            # Velocity gain
-float64[] torque        # Desired joint torque in N/m
+
+int32[] joint_index     # 要控制的关节索引列表
+                        # 索引编号与机械臂关节顺序一致（通常 0 起对应关节 1），具体请参考机型文档
+
+float64[] p_des         # 期望关节位置 (p_des)，单位: rad，推荐范围 [-12.5, 12.5]
+
+float64[] v_des         # 期望关节速度 (v_des)，单位: rad/s，推荐范围 [-45.0, 45.0]
+
+float64[] kp            # 位置环比例增益 (kp)，推荐范围 [0.0, 500.0]，典型值 10.0
+
+float64[] kd            # 速度环微分增益 (kd)，推荐范围 [-5.0, 5.0]，典型值 0.8
+
+float64[] torque        # 期望关节力矩 (torque)，单位: N·m
+                        # 取值范围与机械臂型号及关节索引相关，请参考对应机型 MIT 控制文档
