@@ -1,5 +1,5 @@
 # perception_pkg
-放 image_preprocess_node、yolo_detector_node、object_localization_node、target_tracker_node。
+放 image_preprocess、yolo_detector、object_localization、target_tracker。
 原则：只负责“看见并理解目标”，不做任务编排。
       （建议拆成：preprocess，detection，localization，tracking)
         后续扩展方式：

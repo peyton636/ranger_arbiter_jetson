@@ -14,25 +14,26 @@ find_package(std_msgs REQUIRED)
 # further dependencies manually.
 # find_package(<dependency> REQUIRED)
 
+
+# Generate messages in the 'msg' folder
+FILE(GLOB_RECURSE msg_files "*.msg")
+FILE(GLOB_RECURSE srv_files "*.srv")
+function(get_relative_path var)
+  set(relative_paths "")
+  foreach(path ${${var}})
+    file(RELATIVE_PATH rel_path ${PROJECT_SOURCE_DIR} ${path})
+    list(APPEND relative_paths ${rel_path})
+  endforeach()
+  set(${var} "${relative_paths}" PARENT_SCOPE)
+endfunction()
+
+get_relative_path(msg_files)
+get_relative_path(srv_files)
+
 rosidl_generate_interfaces(
     ${PROJECT_NAME}
-    "msg/DeviceInfo.msg"
-    "msg/DeviceStatus.msg"
-    "msg/Extrinsics.msg"
-    "msg/Metadata.msg"
-    "msg/IMUInfo.msg"
-    "msg/RGBD.msg"
-    "srv/GetBool.srv"
-    "srv/GetDeviceInfo.srv"
-    "srv/GetCameraInfo.srv"
-    "srv/GetInt32.srv"
-    "srv/GetString.srv"
-    "srv/SetFilter.srv"
-    "srv/SetInt32.srv"
-    "srv/SetString.srv"
-    "srv/SetArrays.srv"
-    "srv/GetUserCalibParams.srv"
-    "srv/SetUserCalibParams.srv"
+    ${msg_files}
+    ${srv_files}
     DEPENDENCIES
     sensor_msgs
     std_msgs
