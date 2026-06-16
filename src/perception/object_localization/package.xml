@@ -1,13 +1,25 @@
 <?xml version="1.0"?>
 <package format="3">
   <name>object_localization</name>
-  <version>0.0.1</version>
-  <description>Perception package for object localization.</description>
-  <maintainer email="dev@cangyi.local">cangyi</maintainer>
+  <version>0.0.0</version>
+  <description>2D detection and depth fusion for 3D object localization</description>
+
+  <maintainer email="user@example.com">user</maintainer>
   <license>Apache-2.0</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
+
   <depend>rclcpp</depend>
+  <depend>sensor_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>vision_msgs</depend>
+  <depend>tf2</depend>
+  <depend>tf2_ros</depend>
+  <depend>cv_bridge</depend>
+  <depend>message_filters</depend>
+
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

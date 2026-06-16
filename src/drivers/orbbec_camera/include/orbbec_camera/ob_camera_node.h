@@ -802,8 +802,8 @@ class OBCameraNode {
   bool enable_sequence_id_filter_ = false;
   bool enable_disparity_to_depth_ = true;
   bool enable_threshold_filter_ = false;
-  bool enable_hardware_noise_removal_filter_ = true;
-  bool enable_noise_removal_filter_ = true;
+  bool enable_hardware_noise_removal_filter_ = true;   // 启用硬件噪声消除滤镜
+  bool enable_noise_removal_filter_ = true;            // 启用软件噪声消除滤镜
   bool enable_spatial_filter_ = true;
   bool enable_temporal_filter_ = false;
   bool enable_hole_filling_filter_ = false;
