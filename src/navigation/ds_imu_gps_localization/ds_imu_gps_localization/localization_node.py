@@ -42,6 +42,8 @@ class ImuGpsLocalizationNode(Node):
         self._path = Path()
         self._path_pub = self.create_publisher(Path, path_topic, 10)
         self._init_logged = False
+        self._imu_count = 0
+        self._gps_fix_count = 0
         self.create_subscription(Imu, "imu/data", self._imu_cb, 50)
         self.create_subscription(NavSatFix, "fix", self._gps_cb, 10)
         self.get_logger().info("IMU/GPS 融合节点已启动，等待 /imu/data 与 /fix")
@@ -66,13 +68,26 @@ class ImuGpsLocalizationNode(Node):
         fused = self._localizer.add_imu_data(imu_data)
         if fused is None:
             if not self._localizer.initialized:
-                self.get_logger().warn("等待 IMU 数据初始化...", throttle_duration_sec=5.0)
+                self._imu_count += 1
+                buf = len(self._localizer.imu_buffer)
+                self.get_logger().warn(
+                    f"融合未初始化：IMU 缓冲 {buf}/100，"
+                    f"有效 GPS fix 收到 {self._gps_fix_count} 次 "
+                    f"（需 status≥0 的 /fix，室内常无 fix）",
+                    throttle_duration_sec=5.0,
+                )
             return
         self._publish_path(fused)
 
     def _gps_cb(self, msg: NavSatFix):
         if msg.status.status < 0:
+            self.get_logger().info(
+                f"收到 /fix 但 status={msg.status.status}（无定位），"
+                "融合需室外有效 GPS fix",
+                throttle_duration_sec=10.0,
+            )
             return
+        self._gps_fix_count += 1
         cov = np.diag([
             msg.position_covariance[0] if msg.position_covariance[0] > 0 else 1.0,
             msg.position_covariance[4] if msg.position_covariance[4] > 0 else 1.0,
@@ -114,7 +129,8 @@ def main():
         pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == "__main__":

@@ -1,16 +1,16 @@
-# STM32 -> Jetson, CAN ID 0x104, GPS fragment A (8B, magic 0xA4)
+# STM32 -> Jetson，CAN ID 0x104，GPS 帧 A（8 字节，魔数 0xA4）
 std_msgs/Header header
 
-uint8 magic                 # fixed 0xA4
-uint8 frag_idx              # fixed 0
+uint8 magic                       # 固定 0xA4
+uint8 frag_idx                    # 固定 0
 
-# FLAGS bitfield: bit0 POS_VALID, bit1 VEL_VALID, bit2 HEADING_VALID,
-# bit3 FIX_3D_LIKE, bit4 USEFULL
+# 定位状态位 FLAGS：bit0=位置有效 bit1=速度有效 bit2=航向有效
+# bit3=类3D定位 bit4=NMEA有效标志A
 uint8 flags
 
-uint8 num_sv
+uint8 num_sv                        # 卫星数
 
-uint16 HDOP_INVALID=65535   # 0xFFFF when unknown
-uint16 hdop_x100              # HDOP * 100
+uint16 HDOP_INVALID=65535         # HDOP 未知时的无效值 0xFFFF
+uint16 hdop_x100                    # 水平精度因子 ×100
 
-uint16 speed_cm_s             # ground speed, cm/s
+uint16 speed_cm_s                   # 对地速度，单位 cm/s

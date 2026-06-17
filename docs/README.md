@@ -2,16 +2,15 @@
 
 | 文件 | 说明 |
 |------|------|
-| [PROTOCOL_V3.md](./PROTOCOL_V3.md) | **唯一权威协议**（Jetson ↔ STM32B ↔ STM32A） |
-
-实现顺序：**先按 PROTOCOL_V3 定稿 → 再改 B 固件与 ROS 包**。  
-Legacy 仅见协议附录 A，不得与新 V3 混用。
-
-**Jetson ROS2（`ds_jetson_bridge` v0.2）：** 24B 下行 + 解析 `0x02` 上行，话题前缀 `stm32b/`。
-
-**STM32B 固件对照：** [STM32B_FIRMWARE_NOTES.md](./STM32B_FIRMWARE_NOTES.md)
-
-**GPS 模块联调（`GPS.py` + CH340 驱动）：** 见本文末尾 [GPS 模块联调](#gps-模块联调gpspy--ch340-驱动) 章节；ROS2 驱动见同章 [§8.3 ROS2 移植总览](#83-ros2-移植总览方案-c已实现)。
+| **[JETSON_CAN_ROS2集成设计.md](./JETSON_CAN_ROS2集成设计.md)** | **ROS2 CAN 架构总文档**（节点、消息、Topic、开发计划） |
+| **[JETSON_RS232_ROS2集成设计.md](./JETSON_RS232_ROS2集成设计.md)** | **ROS2 RS232 架构总文档**（Topic 分发、gateway、与 CAN 对称） |
+| **[JETSON时间同步联调.md](./JETSON时间同步联调.md)** | **USART2 时间同步**（START/PING/QUERY、offset/RTT、联调步骤） |
+| **[LIDAR移植.md](./LIDAR移植.md)** | **RPLIDAR S2** 接入、编译、联调与验证（`/scan`） |
+| [TOPIC_NAMING.md](./TOPIC_NAMING.md) | Topic 命名速查表 |
+| [Jetson_CAN协议.md](./Jetson_CAN协议.md) | CAN2 完整协议（v1.4 定稿） |
+| [PROTOCOL_V3.md](./PROTOCOL_V3.md) | **V3 24B 串口/CAN 应用层帧**（Jetson ↔ STM32B） |
+| [STM32B_FIRMWARE_NOTES.md](./STM32B_FIRMWARE_NOTES.md) | STM32B 固件说明 |
+| 下文 | 串口联调、`ds_jetson_bridge`、GPS/IMU 等实操 |
 
 ---
 

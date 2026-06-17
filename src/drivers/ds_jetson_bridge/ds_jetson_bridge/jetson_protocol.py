@@ -381,6 +381,46 @@ def parse_uplink_status(frame: bytes) -> UplinkStatus | None:
     )
 
 
+@dataclass
+class UplinkExt:
+    seq: int
+    wheel_rf: int
+    wheel_rr: int
+    wheel_lr: int
+    wheel_lf: int
+    steer_rf_millirad: int
+    steer_rr_millirad: int
+    steer_lr_millirad: int
+    steer_lf_millirad: int
+    motor_temp_max_c: int
+    driver_state_or: int
+
+
+def parse_uplink_ext(frame: bytes) -> UplinkExt | None:
+    if len(frame) != FRAME_LEN:
+        return None
+    if frame[0] != FRAME_HEADER or frame[1] != FRAME_TYPE_UP_EXT:
+        return None
+    if xor_frame(frame) != frame[23]:
+        return None
+    temp = frame[19]
+    if temp >= 0x80:
+        temp -= 0x100
+    return UplinkExt(
+        seq=frame[2],
+        wheel_rf=s16_be(frame, 3),
+        wheel_rr=s16_be(frame, 5),
+        wheel_lr=s16_be(frame, 7),
+        wheel_lf=s16_be(frame, 9),
+        steer_rf_millirad=s16_be(frame, 11),
+        steer_rr_millirad=s16_be(frame, 13),
+        steer_lr_millirad=s16_be(frame, 15),
+        steer_lf_millirad=s16_be(frame, 17),
+        motor_temp_max_c=temp,
+        driver_state_or=frame[20],
+    )
+
+
 class FrameParser:
     """Extract valid 24-byte V3 frames from a serial byte stream."""
 

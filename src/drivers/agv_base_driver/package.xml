@@ -1,0 +1,23 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>agv_base_driver</name>
+  <version>0.1.0</version>
+  <description>AGV base driver: /cmd_vel to V3Command, VehicleData and odom</description>
+  <maintainer email="rxp@todo.todo">rxp</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>ament_python</buildtool_depend>
+
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>nav_msgs</exec_depend>
+  <exec_depend>jetson_can_msgs</exec_depend>
+  <exec_depend>scr_sensor</exec_depend>
+  <exec_depend>ds_jetson_bridge</exec_depend>
+  <exec_depend>tf2_ros</exec_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>
