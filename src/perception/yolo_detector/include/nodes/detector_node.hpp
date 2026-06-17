@@ -13,39 +13,41 @@
 #include "visibility_control.hpp"
 #include "adapters/detector_adapter.hpp"
 
-namespace perception {
+namespace perception
+{
 
-class PERCEPTION_YOLO_PUBLIC YolosDetectorNode : public rclcpp_lifecycle::LifecycleNode {
-public:
-  explicit YolosDetectorNode(const rclcpp::NodeOptions& options);
-  ~YolosDetectorNode() override = default;
+  class PERCEPTION_YOLO_PUBLIC YolosDetectorNode : public rclcpp_lifecycle::LifecycleNode
+  {
+  public:
+    explicit YolosDetectorNode(const rclcpp::NodeOptions &options);
+    ~YolosDetectorNode() override = default;
 
-  using CallbackReturn = rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn;
-  
-  CallbackReturn on_configure(const rclcpp_lifecycle::State& state) override;
-  CallbackReturn on_activate(const rclcpp_lifecycle::State& state) override;
-  CallbackReturn on_deactivate(const rclcpp_lifecycle::State& state) override;
-  CallbackReturn on_cleanup(const rclcpp_lifecycle::State& state) override;
-  CallbackReturn on_shutdown(const rclcpp_lifecycle::State& state) override;
+    using CallbackReturn = rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn;
 
-private:
-  void imageCallback(const sensor_msgs::msg::Image::ConstSharedPtr& img_msg);
-  void declareParameters();
-  YolosConfig loadConfig();
+    CallbackReturn on_configure(const rclcpp_lifecycle::State &state) override;
+    CallbackReturn on_activate(const rclcpp_lifecycle::State &state) override;
+    CallbackReturn on_deactivate(const rclcpp_lifecycle::State &state) override;
+    CallbackReturn on_cleanup(const rclcpp_lifecycle::State &state) override;
+    CallbackReturn on_shutdown(const rclcpp_lifecycle::State &state) override;
 
-  std::unique_ptr<IDetectorAdapter> detector_;
-  rclcpp::CallbackGroup::SharedPtr inference_cb_group_;
-  rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr image_sub_;
+  private:
+    void imageCallback(const sensor_msgs::msg::Image::ConstSharedPtr &img_msg);
+    void declareParameters();
+    YolosConfig loadConfig();
 
-  rclcpp_lifecycle::LifecyclePublisher<vision_msgs::msg::Detection2DArray>::SharedPtr det_pub_;
-  rclcpp_lifecycle::LifecyclePublisher<sensor_msgs::msg::Image>::SharedPtr debug_pub_;
-  rclcpp_lifecycle::LifecyclePublisher<std_msgs::msg::Float64MultiArray>::SharedPtr timing_pub_;
+    std::unique_ptr<IDetectorAdapter> detector_;
+    rclcpp::CallbackGroup::SharedPtr inference_cb_group_;
+    rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr image_sub_;
 
-  std::string model_path_, labels_path_, yolo_version_;
-  bool use_gpu_, publish_debug_image_, publish_timing_;
-  float conf_threshold_, nms_threshold_;
-};
+    rclcpp_lifecycle::LifecyclePublisher<vision_msgs::msg::Detection2DArray>::SharedPtr det_pub_;
+    rclcpp_lifecycle::LifecyclePublisher<sensor_msgs::msg::Image>::SharedPtr debug_pub_;
+    rclcpp_lifecycle::LifecyclePublisher<std_msgs::msg::Float64MultiArray>::SharedPtr timing_pub_;
 
-}  // namespace perception
+    std::string model_path_, labels_path_, yolo_version_;
+    bool use_gpu_, publish_debug_image_, publish_timing_;
+    float conf_threshold_, nms_threshold_;
+  };
 
-#endif  // NODES__DETECTOR_NODE_HPP_
+} // namespace perception
+
+#endif // NODES__DETECTOR_NODE_HPP_

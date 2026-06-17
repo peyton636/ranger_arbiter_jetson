@@ -3,7 +3,7 @@
   <name>yolo_detector</name>
   <version>0.0.1</version>
   <description>Perception package for object detection.</description>
-  <maintainer email="dev@cangyi.local">cangyi</maintainer>
+  <maintainer email="guixuhao@cangyi.local">cangyi</maintainer>
   <license>Apache-2.0</license>
 
   <!-- Build tool -->

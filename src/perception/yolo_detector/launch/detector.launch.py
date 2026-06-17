@@ -46,7 +46,7 @@ def generate_launch_description():
     )
     image_topic_arg = DeclareLaunchArgument(
         'image_topic',
-        default_value='/camera/color/image_raw',
+        default_value='/preprocess/detector/image',
         description='Input image topic'
     )
     camera_info_topic_arg = DeclareLaunchArgument(
@@ -82,7 +82,7 @@ def generate_launch_description():
                     'publish_timing': LaunchConfiguration('publish_timing'),
                 }],
                 remappings=[
-                    ('/camera/color/image_raw', LaunchConfiguration('image_topic')),
+                    ('/preprocess/detector/image_raw', LaunchConfiguration('image_topic')),
                     ('/camera/color/camera_info', LaunchConfiguration('camera_info_topic')),
                 ],
             ),

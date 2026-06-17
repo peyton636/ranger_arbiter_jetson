@@ -3,10 +3,17 @@
 #include <cv_bridge/cv_bridge.h>
 #include <yaml-cpp/yaml.h>
 
-namespace image_preprocess
+namespace perception
 {
 
-    PreprocessNode::PreprocessNode() : Node("image_preprocess_node")
+    PreprocessNode::PreprocessNode(const rclcpp::NodeOptions &options)
+        : rclcpp_lifecycle::LifecycleNode("image_preprocess_node", options)
+    {
+        declareParameters();
+        RCLCPP_INFO(this->get_logger(), "image_preprocess_node started.");
+    }
+
+    void PreprocessNode::declareParameters()
     {
         input_topic_ = this->declare_parameter<std::string>("input_topic", "/camera/color/image_raw");
         camera_info_yaml_ = this->declare_parameter<std::string>("camera_params");
@@ -28,32 +35,7 @@ namespace image_preprocess
         model_heights_ = this->declare_parameter<std::vector<int64_t>>(
             "model_heights", std::vector<int64_t>{640, 1024, 640, 640});
 
-        if (model_names_.size() != model_widths_.size() || model_names_.size() != model_heights_.size())
-        {
-            throw std::runtime_error("model_names/model_widths/model_heights size mismatch");
-        }
-
-        loadCameraYaml(camera_info_yaml_);
-
-        //为每个模型创建一个输出图像 publisher
-        for (size_t i = 0; i < model_names_.size(); ++i)
-        {
-            OutputTarget t;
-            t.name = model_names_[i];
-            t.width = static_cast<int>(model_widths_[i]);
-            t.height = static_cast<int>(model_heights_[i]);
-            const std::string topic = "/preprocess/" + t.name + "/image";
-            t.pub = this->create_publisher<sensor_msgs::msg::Image>(topic, rclcpp::SensorDataQoS());
-            outputs_.push_back(t);
-            RCLCPP_INFO(this->get_logger(), "Output: %s -> %dx%d (%s)",
-                        t.name.c_str(), t.width, t.height, topic.c_str());
-        }
-
-        sub_ = this->create_subscription<sensor_msgs::msg::Image>(
-            input_topic_, rclcpp::SensorDataQoS(),
-            std::bind(&PreprocessNode::imageCallback, this, std::placeholders::_1));
-
-        RCLCPP_INFO(this->get_logger(), "image_preprocess_node started.");
+        publish_timing_ = this->declare_parameter<bool>("publish_timing", false);
     }
 
     void PreprocessNode::loadCameraYaml(const std::string &path)
@@ -77,8 +59,7 @@ namespace image_preprocess
         }
 
         // 构造 OpenCV 相机内参矩阵
-        K_ = (cv::Mat_<double>(3, 3) << 
-              k[0], k[1], k[2],
+        K_ = (cv::Mat_<double>(3, 3) << k[0], k[1], k[2],
               k[3], k[4], k[5],
               k[6], k[7], k[8]);
 
@@ -90,6 +71,109 @@ namespace image_preprocess
         }
 
         RCLCPP_INFO(this->get_logger(), "Loaded camera yaml: %s", path.c_str());
+    }
+
+    PreprocessNode::CallbackReturn PreprocessNode::on_configure(const rclcpp_lifecycle::State &)
+    {
+        RCLCPP_INFO(get_logger(), "Configuring...");
+        try
+        {
+            if (model_names_.size() != model_widths_.size() || model_names_.size() != model_heights_.size())
+            {
+                throw std::runtime_error("model_names/model_widths/model_heights size mismatch");
+                return CallbackReturn::FAILURE;
+            }
+
+            RCLCPP_INFO(this->get_logger(), "Input camera params: %s", camera_info_yaml_.c_str());
+            loadCameraYaml(camera_info_yaml_);
+
+            // 为每个模型创建一个输出图像 publisher
+            for (size_t i = 0; i < model_names_.size(); ++i)
+            {
+                if (model_names_[i].empty())
+{
+                    throw std::runtime_error("model_names contains empty string at index " + std::to_string(i));
+                }
+                
+                OutputTarget t;
+                t.name = model_names_[i];
+                t.width = static_cast<int>(model_widths_[i]);
+                t.height = static_cast<int>(model_heights_[i]);
+                RCLCPP_INFO(this->get_logger(), "Configuring output %zu: %s (%dx%d)", i, t.name.c_str(), t.width, t.height);
+                const std::string topic = "/preprocess/" + t.name + "/image";
+                t.pub = this->create_publisher<sensor_msgs::msg::Image>(topic, rclcpp::SensorDataQoS());
+                outputs_.push_back(t);
+                // RCLCPP_INFO(this->get_logger(), "Output: %s -> %dx%d (%s)",
+                //             t.name.c_str(), t.width, t.height, topic.c_str());
+            }
+            inference_cb_group_ = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+            if (publish_timing_) timing_pub_ = create_publisher<std_msgs::msg::Float64MultiArray>("/perception/preprocess/timing", 10);
+        }
+        catch (const std::exception &e)
+        {
+            RCLCPP_ERROR(get_logger(), "Failed to configure: %s", e.what());
+            return CallbackReturn::FAILURE;
+        }
+        return CallbackReturn::SUCCESS;
+    }
+
+    PreprocessNode::CallbackReturn PreprocessNode::on_activate(const rclcpp_lifecycle::State &)
+    {
+        RCLCPP_INFO(get_logger(), "Activating...");
+        if(outputs_.empty() || outputs_.size() != model_names_.size())
+        {
+            RCLCPP_ERROR(get_logger(), "No output publishers configured!");
+            return CallbackReturn::FAILURE;
+        }
+
+        for (auto &output : outputs_){
+            output.pub->on_activate();
+        }
+
+        if (publish_timing_ && timing_pub_) {
+            timing_pub_->on_activate();
+        }
+
+        auto sub_options = rclcpp::SubscriptionOptions();
+        sub_options.callback_group = inference_cb_group_;
+        sub_ = this->create_subscription<sensor_msgs::msg::Image>(
+                input_topic_, rclcpp::SensorDataQoS(),
+                std::bind(&PreprocessNode::imageCallback, this, std::placeholders::_1), sub_options);
+        RCLCPP_INFO(get_logger(), "Activated - listening on %s", input_topic_.c_str());
+        return CallbackReturn::SUCCESS;
+    }
+
+    PreprocessNode::CallbackReturn PreprocessNode::on_deactivate(const rclcpp_lifecycle::State &)
+    {
+        sub_.reset();
+        for (auto &output : outputs_){
+            output.pub->on_deactivate();
+        }
+        if (publish_timing_ && timing_pub_) {
+            timing_pub_->on_deactivate();
+        }
+        return CallbackReturn::SUCCESS;
+    }
+
+    PreprocessNode::CallbackReturn PreprocessNode::on_cleanup(const rclcpp_lifecycle::State &)
+    {
+        if(outputs_.empty() || outputs_.size() != model_names_.size())
+        {
+            RCLCPP_ERROR(get_logger(), "No output publishers configured!");
+            return CallbackReturn::FAILURE;
+        }
+        for (auto &output : outputs_){
+            output.pub.reset();
+        }
+        if (publish_timing_ && timing_pub_) {
+            timing_pub_.reset();
+        }
+        return CallbackReturn::SUCCESS;
+    }
+
+    PreprocessNode::CallbackReturn PreprocessNode::on_shutdown(const rclcpp_lifecycle::State &state)
+    {
+        return on_cleanup(state);
     }
 
     // 初始化去畸变映射表：
@@ -190,4 +274,8 @@ namespace image_preprocess
         }
     }
 
-} // namespace image_preprocess
+} // namespace perception
+
+
+#include <rclcpp_components/register_node_macro.hpp>
+RCLCPP_COMPONENTS_REGISTER_NODE(perception::PreprocessNode)
