@@ -1,0 +1,16 @@
+gripper_controller_node:
+  ros__parameters:
+    gripper_cmd_topic: /task/gripper_cmd
+    # 设计文档话题名为 /gripper/raw_status；默认可直连硬件反馈
+    raw_status_topic: /feedback/gripper_status
+    status_topic: /gripper/status
+    # 专用话题，避免与 motion_stack 仿真 joint_state_broadcaster 争抢 /control/joint_states
+    control_joint_states_topic: /control/gripper_joint_states
+    open_width: 0.07
+    close_width: 0.0
+    default_force: 1.5
+    force_grasp_threshold: 0.8
+    current_grasp_threshold: 0.5
+    grasp_timeout_sec: 8.0
+    width_tolerance: 0.003
+    control_rate_hz: 50.0

@@ -1,0 +1,10 @@
+motion_planner_node:
+  ros__parameters:
+    default_arm_group: arm
+    plan_request_topic: /motion/plan_request
+    grasp_pose_topic: /grasp/selected_pose
+    joint_states_topic: /joint/states
+    trajectory_topic: /motion/trajectory
+    execute_feedback_topic: /motion/execute_feedback
+    execute_result_topic: /motion/execute_result
+    execute_timeout_sec: 120.0

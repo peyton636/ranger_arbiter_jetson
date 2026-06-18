@@ -1,0 +1,10 @@
+arm_controller_node:
+  ros__parameters:
+    trajectory_topic: /motion/trajectory
+    joint_states_topic: /joint/states
+    feedback_joint_states_topic: /feedback/joint_states
+    control_joint_states_topic: /control/joint_states
+    execute_result_topic: /motion/execute_result
+    control_rate_hz: 50.0
+    goal_tolerance: 0.02
+    reach_timeout_sec: 5.0
