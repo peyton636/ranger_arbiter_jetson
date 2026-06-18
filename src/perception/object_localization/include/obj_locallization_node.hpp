@@ -23,73 +23,84 @@
 #include <tf2/LinearMath/Vector3.h>
 #include <tf2_ros/buffer.h>
 #include <tf2_ros/transform_listener.h>
+#include <rclcpp_lifecycle/lifecycle_node.hpp>
+#include "visibility_control.hpp"
 
-namespace object_localization
+namespace perception
 {
 
-class ObjectLocalizationNode : public rclcpp::Node
-{
-public:
-  ObjectLocalizationNode();
+  class ObjLocalizationNode : public rclcpp_lifecycle::LifecycleNode
+  {
+  public:
+    explicit ObjLocalizationNode(const rclcpp::NodeOptions &options);
+    ~ObjLocalizationNode();
 
-private:
-  using DetectionArray = vision_msgs::msg::Detection2DArray;
-  using ImageMsg = sensor_msgs::msg::Image;
-  using CameraInfoMsg = sensor_msgs::msg::CameraInfo;
-  using PoseArrayMsg = geometry_msgs::msg::PoseArray;
+    using CallbackReturn = rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn;
 
-  using SyncPolicy = message_filters::sync_policies::ApproximateTime<
-    DetectionArray, ImageMsg, CameraInfoMsg>;
+    CallbackReturn on_configure(const rclcpp_lifecycle::State &state) override;
+    CallbackReturn on_activate(const rclcpp_lifecycle::State &state) override;
+    CallbackReturn on_deactivate(const rclcpp_lifecycle::State &state) override;
+    CallbackReturn on_cleanup(const rclcpp_lifecycle::State &state) override;
+    CallbackReturn on_shutdown(const rclcpp_lifecycle::State &state) override;
 
-  void syncCallback(
-    const DetectionArray::ConstSharedPtr & detections_msg,
-    const ImageMsg::ConstSharedPtr & depth_msg,
-    const CameraInfoMsg::ConstSharedPtr & camera_info_msg);
+  private:
+    using DetectionArray = vision_msgs::msg::Detection2DArray;
+    using ImageMsg = sensor_msgs::msg::Image;
+    using CameraInfoMsg = sensor_msgs::msg::CameraInfo;
+    using PoseArrayMsg = geometry_msgs::msg::PoseArray;
 
-  void loadHandEyeYaml(const std::string & yaml_path);
+    using SyncPolicy = message_filters::sync_policies::ApproximateTime<
+        DetectionArray, ImageMsg, CameraInfoMsg>;
 
-  bool getDepthFromDetection(
-    const cv::Mat & depth_image,
-    const vision_msgs::msg::Detection2D & det,
-    double & depth_m) const;
+    void syncCallback(
+        const DetectionArray::ConstSharedPtr &detections_msg,
+        const ImageMsg::ConstSharedPtr &depth_msg,
+        const CameraInfoMsg::ConstSharedPtr &camera_info_msg);
 
-  bool transformPointToTarget(
-    const tf2::Vector3 & p_camera,
-    const builtin_interfaces::msg::Time & stamp,
-    const std::string & camera_frame,
-    tf2::Vector3 & p_target) const;
+    void loadHandEyeYaml(const std::string &yaml_path);
 
-  static tf2::Transform transformMsgToTf(const geometry_msgs::msg::Transform & msg);
+    bool getDepthFromDetection(
+        const cv::Mat &depth_image,
+        const vision_msgs::msg::Detection2D &det,
+        double &depth_m) const;
 
-private:
-  rclcpp::Publisher<PoseArrayMsg>::SharedPtr pose_pub_;
+    bool transformPointToTarget(
+        const tf2::Vector3 &p_camera,
+        const builtin_interfaces::msg::Time &stamp,
+        const std::string &camera_frame,
+        tf2::Vector3 &p_target) const;
 
-  message_filters::Subscriber<DetectionArray> detections_sub_;
-  message_filters::Subscriber<ImageMsg> depth_sub_;
-  message_filters::Subscriber<CameraInfoMsg> camera_info_sub_;
-  std::shared_ptr<message_filters::Synchronizer<SyncPolicy>> sync_;
+    static tf2::Transform transformMsgToTf(const geometry_msgs::msg::Transform &msg);
 
-  std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
-  std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
+  private:
+    rclcpp::Publisher<PoseArrayMsg>::SharedPtr pose_pub_;
 
-  std::string detections_topic_;
-  std::string depth_topic_;
-  std::string camera_info_topic_;
-  std::string output_topic_;
-  std::string target_frame_;
-  std::string hand_eye_yaml_;
+    message_filters::Subscriber<DetectionArray> detections_sub_;
+    message_filters::Subscriber<ImageMsg> depth_sub_;
+    message_filters::Subscriber<CameraInfoMsg> camera_info_sub_;
+    std::shared_ptr<message_filters::Synchronizer<SyncPolicy>> sync_;
 
-  std::string handeye_parent_frame_;
-  std::string handeye_child_frame_;
+    std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
+    std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
 
-  tf2::Transform handeye_parent_T_camera_;
-  bool has_handeye_{false};
+    std::string detections_topic_;
+    std::string depth_topic_;
+    std::string camera_info_topic_;
+    std::string output_topic_;
+    std::string target_frame_;
+    std::string hand_eye_yaml_;
 
-  int depth_window_{5};
-  double depth_scale_{0.001};
-  double min_depth_{0.1};
-  double max_depth_{5.0};
-  double bbox_roi_scale_{0.4};
-};
+    std::string handeye_parent_frame_;
+    std::string handeye_child_frame_;
 
-}  // namespace object_localization
+    tf2::Transform handeye_parent_T_camera_;
+    bool has_handeye_{false};
+
+    int depth_window_{5};
+    double depth_scale_{0.001};
+    double min_depth_{0.1};
+    double max_depth_{5.0};
+    double bbox_roi_scale_{0.4};
+  };
+
+} // namespace perception

@@ -1,8 +1,8 @@
 <?xml version="1.0"?>
 <package format="3">
-  <name>object_localization</name>
+  <name>agx_gripper_ctrl</name>
   <version>0.0.0</version>
-  <description>2D detection and depth fusion for 3D object localization</description>
+  <description>AGX Gripper Control Integration</description>
 
   <maintainer email="user@example.com">user</maintainer>
   <license>Apache-2.0</license>
@@ -14,23 +14,12 @@
   <build_depend>rclcpp</build_depend>
   <build_depend>rclcpp_lifecycle</build_depend>
   <build_depend>rclcpp_components</build_depend>
-  <build_depend>cv_bridge</build_depend>
-  <build_depend>sensor_msgs</build_depend>
-  <build_depend>vision_msgs</build_depend>
-  <build_depend>geometry_msgs</build_depend>
-  <build_depend>lifecycle_msgs</build_depend>
-  <build_depend>message_filters</build_depend>
 
   <!-- Runtime dependencies -->
   <exec_depend>rclcpp</exec_depend>
   <exec_depend>rclcpp_lifecycle</exec_depend>
   <exec_depend>rclcpp_components</exec_depend>
-  <exec_depend>cv_bridge</exec_depend>
-  <exec_depend>sensor_msgs</exec_depend>
-  <exec_depend>vision_msgs</exec_depend>
-  <exec_depend>geometry_msgs</exec_depend>
   <exec_depend>lifecycle_msgs</exec_depend>
-  <exec_depend>message_filters</exec_depend>
 
   <!-- Message generation -->
   <member_of_group>rosidl_interface_packages</member_of_group>
