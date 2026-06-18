@@ -5,7 +5,7 @@ from __future__ import annotations
 import struct
 from dataclasses import dataclass, field
 
-from jetson_can_msgs.msg import V3Command, V3ExtStatus, V3Status
+from jetson_can_msgs.msg import GpsFrameA, GpsFrameB, GpsFrameC, V3Command, V3ExtStatus, V3Status
 
 from ds_jetson_bridge.jetson_protocol import MODE_CAN, clamp_i16
 
@@ -140,7 +140,11 @@ class McuStatus:
     safety: int = 0
     link_flags: int = 0
     limit_factor: int = 0
+    arb_v: int = 0
+    arb_w: int = 0
+    arb_steer: int = 0
     sonar_mm: list[int] = field(default_factory=lambda: [SONAR_INVALID] * 4)
+    sonar_stamp_ms: list[int] = field(default_factory=lambda: [0, 0, 0, 0])
     nearest_mm: int = SONAR_INVALID
     jetson_seq: int = 0
 
@@ -149,6 +153,7 @@ class McuStatus:
 class SensorBlob:
     timestamp_ms: int = 0
     dist_mm: list[int] = field(default_factory=lambda: [SONAR_INVALID] * 4)
+    stamp_ms: list[int] = field(default_factory=lambda: [0, 0, 0, 0])
 
 
 @dataclass
@@ -164,8 +169,37 @@ class MotorCompact:
 @dataclass
 class AgvEnergy:
     timestamp_ms: int = 0
+    odom: list[int] = field(default_factory=lambda: [0, 0, 0, 0])
     bms_soc: int = 0
+    bms_soh: int = 0
     bms_voltage_0p1v: int = 0
+    bms_current: int = 0
+    bms_temperature: int = 0
+    bms_alarm1: int = 0
+    bms_alarm2: int = 0
+    bms_warning1: int = 0
+    bms_warning2: int = 0
+    remote: list[int] = field(default_factory=lambda: [0] * 7)
+
+
+@dataclass
+class AgvMotorPos:
+    timestamp_ms: int = 0
+    motor_position: list[int] = field(default_factory=lambda: [0] * 8)
+
+
+@dataclass
+class GpsCompact:
+    timestamp_ms: int = 0
+    flags: int = 0
+    num_sv: int = 0
+    hdop_x100: int = 0xFFFF
+    speed_cms: int = 0
+    lat_e7: int = 0
+    lon_e7: int = 0
+    heading_x100: int = 0
+    alt_dm: int = 0x7FFF
+    utc_sec: int = 0
 
 
 @dataclass
@@ -174,6 +208,7 @@ class BlobUplinkCache:
     mcu: McuStatus | None = None
     sensor: SensorBlob | None = None
     energy: AgvEnergy | None = None
+    motor_pos: AgvMotorPos | None = None
     motors: list[MotorCompact] = field(default_factory=list)
 
     def update_motors(self, chunk: list[MotorCompact], base: int = 0) -> None:
@@ -211,8 +246,12 @@ def parse_mcu_status(payload: bytes) -> McuStatus | None:
     s.safety = payload[5]
     s.link_flags = payload[6]
     s.limit_factor = payload[7]
+    s.arb_v = _s16be(payload, 8)
+    s.arb_w = _s16be(payload, 10)
+    s.arb_steer = _s16be(payload, 12)
     for i in range(4):
         s.sonar_mm[i] = _u16be(payload, 14 + i * 2)
+        s.sonar_stamp_ms[i] = _u32be(payload, 22 + i * 4)
     s.nearest_mm = _u16be(payload, 38)
     s.jetson_seq = payload[40]
     return s
@@ -225,6 +264,7 @@ def parse_sensor_blob(payload: bytes) -> SensorBlob | None:
     b.timestamp_ms = _u32be(payload, 0)
     for i in range(4):
         b.dist_mm[i] = _u16be(payload, 4 + i * 2)
+        b.stamp_ms[i] = _u32be(payload, 12 + i * 4)
     return b
 
 
@@ -259,14 +299,102 @@ def parse_agv_motor58(payload: bytes) -> list[MotorCompact] | None:
     return _parse_motor_chunk(payload)
 
 
+def parse_gps_compact(payload: bytes) -> GpsCompact | None:
+    if len(payload) != PAYLOAD_LEN[MSG_GPS_COMPACT]:
+        return None
+    g = GpsCompact()
+    g.timestamp_ms = _u32be(payload, 0)
+    g.flags = payload[4]
+    g.num_sv = payload[5]
+    g.hdop_x100 = _u16be(payload, 6)
+    g.speed_cms = _u16be(payload, 8)
+    g.lat_e7 = struct.unpack_from(">i", payload, 10)[0]
+    g.lon_e7 = struct.unpack_from(">i", payload, 14)[0]
+    g.heading_x100 = _s16be(payload, 18)
+    g.alt_dm = _s16be(payload, 20)
+    g.utc_sec = _u32be(payload, 22)
+    return g
+
+
+def gps_compact_to_frame_a(gps: GpsCompact, stamp) -> GpsFrameA:
+    msg = GpsFrameA()
+    msg.header.stamp = stamp
+    msg.header.frame_id = "stm32b"
+    msg.magic = 0xA4
+    msg.frag_idx = 0
+    msg.flags = gps.flags
+    msg.num_sv = gps.num_sv
+    msg.hdop_x100 = gps.hdop_x100
+    msg.speed_cm_s = gps.speed_cms
+    return msg
+
+
+def gps_compact_to_frame_b(gps: GpsCompact, stamp) -> GpsFrameB:
+    msg = GpsFrameB()
+    msg.header.stamp = stamp
+    msg.header.frame_id = "stm32b"
+    msg.magic = 0xA4
+    msg.frag_idx = 1
+    msg.lat_e7 = gps.lat_e7
+    msg.heading_x100 = gps.heading_x100
+    return msg
+
+
+def gps_compact_to_frame_c(gps: GpsCompact, stamp) -> GpsFrameC:
+    msg = GpsFrameC()
+    msg.header.stamp = stamp
+    msg.header.frame_id = "stm32b"
+    msg.magic = 0xA4
+    msg.frag_idx = 2
+    msg.lon_e7 = gps.lon_e7
+    msg.alt_dm = gps.alt_dm
+    return msg
+
+
 def parse_agv_energy(payload: bytes) -> AgvEnergy | None:
     if len(payload) != PAYLOAD_LEN[MSG_AGV_ENERGY]:
         return None
     e = AgvEnergy()
     e.timestamp_ms = _u32be(payload, 0)
-    e.bms_soc = payload[24]
-    e.bms_voltage_0p1v = _u16be(payload, 26)
+    for i in range(4):
+        e.odom[i] = struct.unpack_from(">i", payload, 4 + i * 4)[0]
+    e.bms_soc = payload[20]
+    e.bms_soh = payload[21]
+    e.bms_voltage_0p1v = _u16be(payload, 22)
+    e.bms_current = _s16be(payload, 24)
+    e.bms_temperature = _s16be(payload, 26)
+    e.bms_alarm1 = payload[28]
+    e.bms_alarm2 = payload[29]
+    e.bms_warning1 = payload[30]
+    e.bms_warning2 = payload[31]
+    e.remote = list(payload[32:39])
     return e
+
+
+def parse_agv_motor_pos(payload: bytes) -> AgvMotorPos | None:
+    if len(payload) != PAYLOAD_LEN[MSG_AGV_MOTOR_POS]:
+        return None
+    p = AgvMotorPos()
+    p.timestamp_ms = _u32be(payload, 0)
+    for i in range(8):
+        p.motor_position[i] = struct.unpack_from(">i", payload, 4 + i * 4)[0]
+    return p
+
+
+def encode_sensor_cfg(
+    seq: int,
+    timestamp_ms: int,
+    *,
+    threshold_mm: int = 0,
+    enable_mask: int = 0x0F,
+) -> bytes:
+    payload = struct.pack(
+        ">IHB",
+        int(timestamp_ms) & 0xFFFFFFFF,
+        threshold_mm & 0xFFFF,
+        enable_mask & 0xFF,
+    ) + bytes([0])
+    return encode_blob_frame(MSG_SENSOR_CFG, seq, payload)
 
 
 def _sonar_u16(raw: int) -> int:

@@ -18,11 +18,15 @@ class SerialLink:
         baud: int = 115200,
         *,
         settle_s: float = 0.15,
+        skip_dtr_reset: bool = True,
+        no_flush_on_open: bool = True,
         logger=None,
     ) -> None:
         self._port = port
         self._baud = baud
         self._settle_s = settle_s
+        self._skip_dtr_reset = skip_dtr_reset
+        self._no_flush_on_open = no_flush_on_open
         self._logger = logger
         self._ser: serial.Serial | None = None
         self._write_lock = threading.Lock()
@@ -47,14 +51,16 @@ class SerialLink:
                 dsrdtr=False,
                 rtscts=False,
             )
-            self._ser.reset_input_buffer()
-            self._ser.reset_output_buffer()
-            try:
-                self._ser.dtr = False
-                time.sleep(0.05)
-                self._ser.dtr = True
-            except Exception:
-                pass
+            if not self._no_flush_on_open:
+                self._ser.reset_input_buffer()
+                self._ser.reset_output_buffer()
+            if not self._skip_dtr_reset:
+                try:
+                    self._ser.dtr = False
+                    time.sleep(0.05)
+                    self._ser.dtr = True
+                except Exception:
+                    pass
             time.sleep(self._settle_s)
             return True
         except OSError as exc:
@@ -86,8 +92,9 @@ class SerialLink:
             if n <= 0:
                 return b""
             return self._ser.read(n)
-        except (OSError, serial.SerialException):
-            self.close()
+        except (OSError, serial.SerialException) as exc:
+            if self._logger:
+                self._logger.warn(f"串口读失败(保持连接): {exc}", throttle_duration_sec=5.0)
             return b""
 
     def flush_rx(self, discard_s: float = 0.2) -> int:
@@ -105,8 +112,9 @@ class SerialLink:
                 else:
                     time.sleep(0.01)
             self._ser.reset_input_buffer()
-        except (OSError, serial.SerialException):
-            self.close()
+        except (OSError, serial.SerialException) as exc:
+            if self._logger:
+                self._logger.warn(f"flush_rx 失败(保持连接): {exc}", throttle_duration_sec=5.0)
         finally:
             if self._ser is not None:
                 self._ser.timeout = old_timeout

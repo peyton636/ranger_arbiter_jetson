@@ -23,6 +23,10 @@ def generate_launch_description():
             DeclareLaunchArgument("time_sync_rtt_warn_ms", default_value="50.0"),
             DeclareLaunchArgument("use_blob_v2", default_value="true"),
             DeclareLaunchArgument("debug_rx_stats_interval_s", default_value="5.0"),
+            DeclareLaunchArgument("skip_dtr_reset", default_value="true"),
+            DeclareLaunchArgument("no_flush_on_open", default_value="true"),
+            DeclareLaunchArgument("flush_rx_on_connect", default_value="false"),
+            DeclareLaunchArgument("rx_dispatch_hz", default_value="50.0"),
             Node(
                 package="rs232_gateway",
                 executable="rs232_gateway",
@@ -58,6 +62,14 @@ def generate_launch_description():
                             "debug_rx_stats_interval_s"
                         )
                     },
+                    {"skip_dtr_reset": LaunchConfiguration("skip_dtr_reset")},
+                    {"no_flush_on_open": LaunchConfiguration("no_flush_on_open")},
+                    {
+                        "flush_rx_on_connect": LaunchConfiguration(
+                            "flush_rx_on_connect"
+                        )
+                    },
+                    {"rx_dispatch_hz": LaunchConfiguration("rx_dispatch_hz")},
                 ],
             ),
         ]

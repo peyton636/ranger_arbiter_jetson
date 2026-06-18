@@ -1,7 +1,8 @@
 # Jetson CAN Topic 命名速查
 
 > **完整架构说明**见 [JETSON_CAN_ROS2集成设计.md](./JETSON_CAN_ROS2集成设计.md)  
-> RS232 路径见 [JETSON_RS232_ROS2集成设计.md](./JETSON_RS232_ROS2集成设计.md) §5
+> RS232 路径见 [JETSON_RS232_ROS2集成设计.md](./JETSON_RS232_ROS2集成设计.md) §5  
+> 以太网路径见 [以太网接入与联调.md](./以太网接入与联调.md) §4
 
 与团队节点分层表对齐：`can_gateway_node` 负责 CAN 硬件与协议解析；`agv_base_driver_node` 负责底盘逻辑与 `/vehicle/vehicle_data`。
 
@@ -90,11 +91,36 @@ SocketCAN (can2, 500 kbps)
 
 ---
 
+## 以太网 Topic（`/jetson_eth/*`）
+
+与 `/jetson_can/*`、`/jetson_rs232/*` 对称；完整说明见 [以太网接入与联调.md](./以太网接入与联调.md)。
+
+| Topic | 消息类型 | 说明 |
+|-------|----------|------|
+| `/jetson_eth/command` | `V3Command` | 下行（agv_base_driver → eth_gateway） |
+| `/jetson_eth/v3_status` | `V3Status` | 聚合状态（driver 订阅） |
+| `/jetson_eth/v3_ext_status` | `V3ExtStatus` | 扩展状态 |
+| `/jetson_eth/link` | `std_msgs/Bool` | 链路 |
+| `/jetson_eth/time_sync` | `TimeSyncResponse` | 0xA5/0x108 时间同步（offset/RTT/UTC） |
+| `/jetson_eth/gps/{a,b,c}` | `GpsFrameA/B/C` | GPS 兼容拆分 |
+| `/jetson_eth/blob/motion` | `BlobAgvMotion` | BLOB 0x02 |
+| `/jetson_eth/blob/mcu_status` | `BlobMcuStatus` | BLOB 0x03 |
+| `/jetson_eth/blob/sensor` | `BlobSensor` | BLOB 0x04 |
+| `/jetson_eth/blob/gps` | `BlobGpsCompact` | BLOB 0x05 |
+| `/jetson_eth/blob/motor_04` | `BlobMotorGroup` | BLOB 0x06 |
+| `/jetson_eth/blob/motor_58` | `BlobMotorGroup` | BLOB 0x07 |
+| `/jetson_eth/blob/energy` | `BlobAgvEnergy` | BLOB 0x08 |
+| `/jetson_eth/blob/motor_pos` | `BlobMotorPos` | BLOB 0x0B |
+| `/jetson_eth/blob/sensor_cfg` | `BlobSensorCfg` | BLOB 0x10 下行（订阅） |
+
+---
+
 ## 变更记录
 
 
 | 版本   | 日期         | 说明                                                                    |
 | ---- | ---------- | --------------------------------------------------------------------- |
+| v1.1 | 2026-06-17 | 增加 `/jetson_eth/*` 与 BLOB blob/* topic 表 |
 | v1.0 | 2026-06-10 | 初稿：`jetson_can_msgs` 重命名；`/vehicle/vehicle_data` + `/jetson_can/*` 定稿 |
 
 

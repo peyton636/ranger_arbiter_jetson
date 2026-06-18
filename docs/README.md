@@ -4,6 +4,7 @@
 |------|------|
 | **[JETSON_CAN_ROS2集成设计.md](./JETSON_CAN_ROS2集成设计.md)** | **ROS2 CAN 架构总文档**（节点、消息、Topic、开发计划） |
 | **[JETSON_RS232_ROS2集成设计.md](./JETSON_RS232_ROS2集成设计.md)** | **ROS2 RS232 架构总文档**（Topic 分发、gateway、与 CAN 对称） |
+| **[以太网接入与联调.md](./以太网接入与联调.md)** | **以太网 UDP BLOB v2**（IP、eth_gateway、Topic、联调步骤） |
 | **[JETSON时间同步联调.md](./JETSON时间同步联调.md)** | **USART2 时间同步**（START/PING/QUERY、offset/RTT、联调步骤） |
 | **[LIDAR移植.md](./LIDAR移植.md)** | **RPLIDAR S2** 接入、编译、联调与验证（`/scan`） |
 | [TOPIC_NAMING.md](./TOPIC_NAMING.md) | Topic 命名速查表 |

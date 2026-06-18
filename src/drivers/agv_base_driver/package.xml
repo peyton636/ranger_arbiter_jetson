@@ -16,6 +16,7 @@
   <exec_depend>scr_sensor</exec_depend>
   <exec_depend>ds_jetson_bridge</exec_depend>
   <exec_depend>tf2_ros</exec_depend>
+  <exec_depend>eth_gateway</exec_depend>
 
   <export>
     <build_type>ament_python</build_type>

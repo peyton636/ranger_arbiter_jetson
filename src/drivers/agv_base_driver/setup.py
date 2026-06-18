@@ -12,6 +12,7 @@ setup(
         ("share/" + package_name + "/launch", [
             "launch/agv_base_driver.launch.py",
             "launch/jetson_rs232_bringup.launch.py",
+            "launch/jetson_eth_bringup.launch.py",
         ]),
     ],
     install_requires=["setuptools"],

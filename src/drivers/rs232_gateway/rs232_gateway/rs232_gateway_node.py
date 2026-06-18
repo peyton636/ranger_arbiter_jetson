@@ -9,6 +9,7 @@ import time
 
 import rclpy
 from jetson_can_msgs.msg import (
+    BlobSensorCfg,
     FaultReport,
     GpsFrameA,
     GpsFrameB,
@@ -19,8 +20,16 @@ from jetson_can_msgs.msg import (
     V3ExtStatus,
     V3Status,
 )
+from rcl_interfaces.msg import ParameterDescriptor
 from rclpy.node import Node
 from std_msgs.msg import Bool, UInt8MultiArray
+
+# launch 传 tx_rate_hz:=20 时为 INTEGER，需 dynamic_typing
+_PARAM_FLOAT = ParameterDescriptor(dynamic_typing=True)
+
+
+def _param_float(node: Node, name: str) -> float:
+    return float(node.get_parameter(name).value)
 
 from ds_jetson_bridge.jetson_protocol import (
     FRAME_TYPE_UP_EXT,
@@ -31,25 +40,8 @@ from ds_jetson_bridge.jetson_protocol import (
     parse_uplink_status,
 )
 
-from rs232_gateway.blob_codec import (
-    MSG_AGV_ENERGY,
-    MSG_AGV_MOTION,
-    MSG_AGV_MOTOR04,
-    MSG_AGV_MOTOR58,
-    MSG_MCU_STATUS,
-    MSG_SENSOR_BLOB,
-    BlobUplinkCache,
-    cache_to_v3_ext,
-    cache_to_v3_status,
-    encode_agv_control,
-    parse_agv_energy,
-    parse_agv_motion,
-    parse_agv_motor04,
-    parse_agv_motor58,
-    parse_mcu_status,
-    parse_sensor_blob,
-    v3_command_to_blob,
-)
+from rs232_gateway.blob_codec import encode_agv_control, encode_sensor_cfg, v3_command_to_blob
+from rs232_gateway.blob_topic_pub import BlobTopicPublisher
 from rs232_gateway.serial_io import SerialLink
 from rs232_gateway.service_codec import (
     payload_to_fault,
@@ -69,7 +61,6 @@ from rs232_gateway.service_frame import (
     Rs232StreamParser,
     RxStats,
     StreamItem,
-    UPLINK_BLOB_MSG_IDS,
 )
 from rs232_gateway.time_sync import CMD_START, JetsonTimeSync, mono_ms
 from rs232_gateway.v3_codec import (
@@ -88,26 +79,30 @@ class Rs232GatewayNode(Node):
             "/dev/serial/by-id/usb-Prolific_Technology_Inc._USB-Serial_Controller-if00-port0",
         )
         self.declare_parameter("baud_rate", 115200)
-        self.declare_parameter("tx_rate_hz", 50.0)
+        self.declare_parameter("tx_rate_hz", 50.0, _PARAM_FLOAT)
         self.declare_parameter("uplink_timeout_ms", UPLINK_TIMEOUT_MS)
         self.declare_parameter("auto_reconnect", True)
-        self.declare_parameter("reconnect_interval_s", 1.0)
-        self.declare_parameter("reconnect_settle_s", 0.15)
+        self.declare_parameter("reconnect_interval_s", 1.0, _PARAM_FLOAT)
+        self.declare_parameter("reconnect_settle_s", 0.15, _PARAM_FLOAT)
         self.declare_parameter("publish_raw", False)
         self.declare_parameter("heartbeat_mode_req", 1)
         self.declare_parameter("time_sync_enable", True)
         self.declare_parameter("time_sync_session_id", 1)
         self.declare_parameter("time_sync_ping_burst", 10)
-        self.declare_parameter("time_sync_ping_burst_interval_s", 0.1)
-        self.declare_parameter("time_sync_ping_interval_s", 1.0)
-        self.declare_parameter("time_sync_query_interval_s", 10.0)
-        self.declare_parameter("time_sync_rtt_warn_ms", 50.0)
+        self.declare_parameter("time_sync_ping_burst_interval_s", 0.1, _PARAM_FLOAT)
+        self.declare_parameter("time_sync_ping_interval_s", 1.0, _PARAM_FLOAT)
+        self.declare_parameter("time_sync_query_interval_s", 10.0, _PARAM_FLOAT)
+        self.declare_parameter("time_sync_rtt_warn_ms", 50.0, _PARAM_FLOAT)
         self.declare_parameter("use_blob_v2", True)
-        self.declare_parameter("debug_rx_stats_interval_s", 5.0)
+        self.declare_parameter("debug_rx_stats_interval_s", 5.0, _PARAM_FLOAT)
+        self.declare_parameter("skip_dtr_reset", True)
+        self.declare_parameter("no_flush_on_open", True)
+        self.declare_parameter("flush_rx_on_connect", False)
+        self.declare_parameter("rx_dispatch_hz", 50.0, _PARAM_FLOAT)
 
         port = self.get_parameter("serial_port").get_parameter_value().string_value
         baud = self.get_parameter("baud_rate").get_parameter_value().integer_value
-        self._tx_rate_hz = self.get_parameter("tx_rate_hz").get_parameter_value().double_value
+        self._tx_rate_hz = _param_float(self, "tx_rate_hz")
         self._uplink_timeout_s = (
             self.get_parameter("uplink_timeout_ms").get_parameter_value().integer_value
             / 1000.0
@@ -115,10 +110,8 @@ class Rs232GatewayNode(Node):
         self._auto_reconnect = (
             self.get_parameter("auto_reconnect").get_parameter_value().bool_value
         )
-        self._reconnect_interval_s = (
-            self.get_parameter("reconnect_interval_s").get_parameter_value().double_value
-        )
-        settle = self.get_parameter("reconnect_settle_s").get_parameter_value().double_value
+        self._reconnect_interval_s = _param_float(self, "reconnect_interval_s")
+        settle = _param_float(self, "reconnect_settle_s")
         self._publish_raw = self.get_parameter("publish_raw").get_parameter_value().bool_value
         self._heartbeat_mode_req = (
             self.get_parameter("heartbeat_mode_req").get_parameter_value().integer_value
@@ -129,28 +122,31 @@ class Rs232GatewayNode(Node):
         self._use_blob_v2 = (
             self.get_parameter("use_blob_v2").get_parameter_value().bool_value
         )
-        self._debug_rx_stats_interval_s = (
-            self.get_parameter("debug_rx_stats_interval_s")
-            .get_parameter_value()
-            .double_value
+        self._debug_rx_stats_interval_s = _param_float(self, "debug_rx_stats_interval_s")
+        skip_dtr = self.get_parameter("skip_dtr_reset").get_parameter_value().bool_value
+        no_flush = self.get_parameter("no_flush_on_open").get_parameter_value().bool_value
+        self._flush_rx_on_connect = (
+            self.get_parameter("flush_rx_on_connect").get_parameter_value().bool_value
         )
+        rx_dispatch_hz = _param_float(self, "rx_dispatch_hz")
 
         self._time_sync = JetsonTimeSync(
             session_id=self.get_parameter("time_sync_session_id").get_parameter_value().integer_value,
             ping_burst_count=self.get_parameter("time_sync_ping_burst").get_parameter_value().integer_value,
-            ping_burst_interval_s=self.get_parameter(
-                "time_sync_ping_burst_interval_s"
-            ).get_parameter_value().double_value,
-            ping_interval_s=self.get_parameter(
-                "time_sync_ping_interval_s"
-            ).get_parameter_value().double_value,
-            query_interval_s=self.get_parameter(
-                "time_sync_query_interval_s"
-            ).get_parameter_value().double_value,
-            rtt_warn_ms=self.get_parameter("time_sync_rtt_warn_ms").get_parameter_value().double_value,
+            ping_burst_interval_s=_param_float(self, "time_sync_ping_burst_interval_s"),
+            ping_interval_s=_param_float(self, "time_sync_ping_interval_s"),
+            query_interval_s=_param_float(self, "time_sync_query_interval_s"),
+            rtt_warn_ms=_param_float(self, "time_sync_rtt_warn_ms"),
         )
 
-        self._link = SerialLink(port, baud, settle_s=settle, logger=self.get_logger())
+        self._link = SerialLink(
+            port,
+            baud,
+            settle_s=settle,
+            skip_dtr_reset=skip_dtr,
+            no_flush_on_open=no_flush,
+            logger=self.get_logger(),
+        )
         self._parser = Rs232StreamParser(parse_v3=not self._use_blob_v2)
         self._tx_seq = 0
         self._last_uplink_time = 0.0
@@ -158,20 +154,15 @@ class Rs232GatewayNode(Node):
         self._next_reconnect = 0.0
         self._latest_command: V3Command | None = None
         self._link_was_connected = False
-        self._blob_cache = BlobUplinkCache()
-        self._rx_queue: queue.Queue[StreamItem] = queue.Queue(maxsize=512)
+        self._blob_pub = BlobTopicPublisher(self, "/jetson_rs232")
+        self._cfg_tx_seq = 0
+        self._pub_status_interval = 0
+        self._rx_queue: queue.Queue[StreamItem] = queue.Queue(maxsize=2048)
         self._rx_stop = threading.Event()
         self._rx_thread: threading.Thread | None = None
         self._last_stats_log = time.monotonic()
 
-        self._pub_status = self.create_publisher(V3Status, "/jetson_rs232/v3_status", 10)
-        self._pub_ext = self.create_publisher(
-            V3ExtStatus, "/jetson_rs232/v3_ext_status", 10
-        )
         self._pub_link = self.create_publisher(Bool, "/jetson_rs232/link", 10)
-        self._pub_gps_a = self.create_publisher(GpsFrameA, "/jetson_rs232/gps/a", 10)
-        self._pub_gps_b = self.create_publisher(GpsFrameB, "/jetson_rs232/gps/b", 10)
-        self._pub_gps_c = self.create_publisher(GpsFrameC, "/jetson_rs232/gps/c", 10)
         self._pub_time_sync = self.create_publisher(
             TimeSyncResponse, "/jetson_rs232/time_sync", 10
         )
@@ -189,9 +180,17 @@ class Rs232GatewayNode(Node):
         self._sub_command = self.create_subscription(
             V3Command, "/jetson_rs232/command", self._command_cb, 10
         )
+        self._sub_sensor_cfg = self.create_subscription(
+            BlobSensorCfg,
+            "/jetson_rs232/blob/sensor_cfg",
+            self._sensor_cfg_cb,
+            10,
+        )
 
         period = 1.0 / self._tx_rate_hz if self._tx_rate_hz > 0 else 0.02
         self._timer = self.create_timer(period, self._tick)
+        rx_period = 1.0 / rx_dispatch_hz if rx_dispatch_hz > 0 else 0.02
+        self._rx_dispatch_timer = self.create_timer(rx_period, self._dispatch_rx_only)
 
         if not self._ensure_serial():
             self.get_logger().warn(
@@ -208,6 +207,22 @@ class Rs232GatewayNode(Node):
     def _command_cb(self, msg: V3Command) -> None:
         self._latest_command = msg
 
+    def _sensor_cfg_cb(self, msg: BlobSensorCfg) -> None:
+        if not self._link.connected or not self._use_blob_v2:
+            return
+        ts = msg.timestamp_ms if msg.timestamp_ms else int(mono_ms())
+        try:
+            frame = encode_sensor_cfg(
+                self._cfg_tx_seq,
+                ts,
+                threshold_mm=msg.threshold_mm,
+                enable_mask=msg.enable_mask,
+            )
+            self._link.write(frame)
+            self._cfg_tx_seq = (self._cfg_tx_seq + 1) & 0xFF
+        except OSError as exc:
+            self.get_logger().warn(f"sensor_cfg 写入失败: {exc}")
+
     def _start_rx_thread(self) -> None:
         self._stop_rx_thread()
         self._rx_stop.clear()
@@ -221,6 +236,7 @@ class Rs232GatewayNode(Node):
         if self._rx_thread is not None and self._rx_thread.is_alive():
             self._rx_thread.join(timeout=0.5)
         self._rx_thread = None
+        self._process_rx_queue()
         self._drain_rx_queue()
 
     def _drain_rx_queue(self) -> None:
@@ -264,12 +280,13 @@ class Rs232GatewayNode(Node):
         self._stop_rx_thread()
         if self._link.open():
             self._parser = Rs232StreamParser(parse_v3=not self._use_blob_v2)
-            self._blob_cache = BlobUplinkCache()
+            self._blob_pub.reset_cache()
             self._last_uplink_time = 0.0
             self._last_blob_uplink_time = 0.0
             self._last_stats_log = time.monotonic()
             self.get_logger().info(f"串口已连接: {self._link.port}")
-            self._link.flush_rx()
+            if self._flush_rx_on_connect:
+                self._link.flush_rx()
             self._start_rx_thread()
             self._prime_downlink()
             return True
@@ -316,9 +333,13 @@ class Rs232GatewayNode(Node):
             self.get_logger().info("链路: 已连接" if connected else "链路: 断开")
             self._link_was_connected = connected
 
+    def _dispatch_rx_only(self) -> None:
+        self._process_rx_queue()
+
     def _tick(self) -> None:
         connected = self._ensure_serial()
         self._publish_link(connected)
+        self._process_rx_queue()
         if not connected:
             return
 
@@ -339,7 +360,6 @@ class Rs232GatewayNode(Node):
             self._stop_rx_thread()
             return
 
-        self._process_rx_queue()
         self._maybe_log_rx_stats()
         self._check_uplink_stale()
 
@@ -354,8 +374,8 @@ class Rs232GatewayNode(Node):
 
     def _dispatch_item(self, item: StreamItem, stamp) -> None:
         if item[0] == "blob":
-            _, msg_id, _seq, payload = item
-            self._handle_blob_frame(msg_id, payload, stamp)
+            _, msg_id, blob_seq, payload = item
+            self._handle_blob_frame(msg_id, blob_seq, payload, stamp)
         elif item[0] == "v3":
             v3_frame = item[1]
             if self._pub_raw is not None:
@@ -368,13 +388,14 @@ class Rs232GatewayNode(Node):
                 if status is None:
                     return
                 self._last_uplink_time = time.monotonic()
-                self._pub_status.publish(uplink_status_to_msg(status, stamp))
+                self._blob_pub.pub_v3_status.publish(uplink_status_to_msg(status, stamp))
+                self._pub_status_interval += 1
             elif v3_frame[1] == FRAME_TYPE_UP_EXT:
                 ext = parse_uplink_ext(v3_frame)
                 if ext is None:
                     return
                 self._last_uplink_time = time.monotonic()
-                self._pub_ext.publish(uplink_ext_to_msg(ext, stamp))
+                self._blob_pub.pub_v3_ext.publish(uplink_ext_to_msg(ext, stamp))
         else:
             _, can_id, payload = item
             if can_id == CAN_ID_TIME_SYNC_RSP:
@@ -382,54 +403,12 @@ class Rs232GatewayNode(Node):
             else:
                 self._handle_service_frame(can_id, payload, stamp)
 
-    def _handle_blob_frame(self, msg_id: int, payload: bytes, stamp) -> None:
-        if msg_id in UPLINK_BLOB_MSG_IDS:
+    def _handle_blob_frame(
+        self, msg_id: int, blob_seq: int, payload: bytes, stamp
+    ) -> None:
+        if self._blob_pub.handle_frame(msg_id, blob_seq, payload, stamp):
             self._last_blob_uplink_time = time.monotonic()
-
-        updated_status = False
-        updated_ext = False
-
-        if msg_id == MSG_AGV_MOTION:
-            motion = parse_agv_motion(payload)
-            if motion is not None:
-                self._blob_cache.motion = motion
-                updated_status = True
-                updated_ext = True
-        elif msg_id == MSG_MCU_STATUS:
-            mcu = parse_mcu_status(payload)
-            if mcu is not None:
-                self._blob_cache.mcu = mcu
-                updated_status = True
-                updated_ext = True
-        elif msg_id == MSG_SENSOR_BLOB:
-            sensor = parse_sensor_blob(payload)
-            if sensor is not None:
-                self._blob_cache.sensor = sensor
-                updated_status = True
-        elif msg_id == MSG_AGV_MOTOR04:
-            motors = parse_agv_motor04(payload)
-            if motors is not None:
-                self._blob_cache.update_motors(motors, base=0)
-                updated_ext = True
-        elif msg_id == MSG_AGV_MOTOR58:
-            motors = parse_agv_motor58(payload)
-            if motors is not None:
-                self._blob_cache.update_motors(motors, base=4)
-                updated_ext = True
-        elif msg_id == MSG_AGV_ENERGY:
-            energy = parse_agv_energy(payload)
-            if energy is not None:
-                self._blob_cache.energy = energy
-                updated_status = True
-
-        if updated_status:
-            status_msg = cache_to_v3_status(self._blob_cache, stamp)
-            if status_msg is not None:
-                self._pub_status.publish(status_msg)
-        if updated_ext:
-            ext_msg = cache_to_v3_ext(self._blob_cache, stamp)
-            if ext_msg is not None:
-                self._pub_ext.publish(ext_msg)
+            self._pub_status_interval += 1
 
     def _handle_time_sync(self, payload: bytes, stamp, t4_ms: float) -> None:
         update = None
@@ -472,15 +451,15 @@ class Rs232GatewayNode(Node):
         if can_id == CAN_ID_GPS_A:
             msg = payload_to_gps_a(payload, stamp)
             if msg is not None:
-                self._pub_gps_a.publish(msg)
+                self._blob_pub.pub_gps_a.publish(msg)
         elif can_id == CAN_ID_GPS_B:
             msg = payload_to_gps_b(payload, stamp)
             if msg is not None:
-                self._pub_gps_b.publish(msg)
+                self._blob_pub.pub_gps_b.publish(msg)
         elif can_id == CAN_ID_GPS_C:
             msg = payload_to_gps_c(payload, stamp)
             if msg is not None:
-                self._pub_gps_c.publish(msg)
+                self._blob_pub.pub_gps_c.publish(msg)
         elif can_id == CAN_ID_FAULT:
             self._pub_fault.publish(payload_to_fault(payload, stamp))
         elif can_id == CAN_ID_STATUS_SNAPSHOT:
@@ -496,7 +475,7 @@ class Rs232GatewayNode(Node):
         s = self._parser.stats.snapshot()
         self.get_logger().info(
             "RX +{:.0f}s: bytes={} blob02={} blob03={} blob04={} "
-            "blob_other={} svc={} v3={} hdr_rej={} resync={}".format(
+            "blob_other={} svc={} v3={} hdr_rej={} resync={} pub_status={}".format(
                 self._debug_rx_stats_interval_s,
                 s["bytes_in"],
                 s["blob_02"],
@@ -507,14 +486,16 @@ class Rs232GatewayNode(Node):
                 s["v3_rx"],
                 s["hdr_reject"],
                 s["resync"],
+                self._pub_status_interval,
             )
         )
+        self._pub_status_interval = 0
         self._parser.stats = RxStats()
 
     def _check_uplink_stale(self) -> None:
         if self._use_blob_v2:
             last = self._last_blob_uplink_time
-            label = " BLOB 0x02/0x03/0x04"
+            label = " BLOB uplink"
         else:
             last = self._last_uplink_time
             label = " 0x02/0x03"

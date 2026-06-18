@@ -2,8 +2,8 @@
 
 | 元数据 | 值 |
 |--------|-----|
-| **协议版本** | v2.0-draft.5.5 |
-| **文档日期** | 2026-06-15 |
+| **协议版本** | v2.0-draft.5.6 |
+| **文档日期** | 2026-06-16 |
 | **物理层** | RS232 115200 8N1（USART2）或 CAN2 500 kbps（编译期二选一） |
 | **编码** | 多字节整数 **大端 BE**；`#pragma pack(1)` |
 
@@ -13,7 +13,7 @@
 
 硬件切换见 `硬件连接与通信协议.md` §2.2（`JETSON_LINK_CAN` 1=CAN2，0=USART2）。
 
-**Jetson ROS2 实现**：`rs232_gateway` 包，`use_blob_v2:=true`（默认）时发 `0xAB` MSG `0x01`，解析上行 BLOB 并映射到 `/jetson_rs232/v3_status` 等 Topic，与 `agv_base_driver` 兼容。
+**Jetson ROS2 实现**：`rs232_gateway` 包，`use_blob_v2:=true`（默认）时发 `0xAB` MSG `0x01`，解析上行 BLOB 并映射到 `/jetson_rs232/v3_status` 等 Topic，与 `agv_base_driver` 兼容。混流 RX 修复与带宽说明见 **附录 C**。
 
 ---
 
@@ -132,5 +132,207 @@ RS232 与 CAN 共用同一字节序列：先 **9 字节头**，再 **LEN 字节 
 
 | 版本 | 日期 | 内容 |
 |------|------|------|
+| v2.0-draft.5.6 | 2026-06-16 | 新增附录 C：`rs232_gateway` 混流 RX 修复（旧/新对照）、带宽与 launch 降载 |
 | v2.0-draft.5.5 | 2026-06-15 | 新增 §0.2 RS232 / §0.3 CAN 双传输映射与 CAN ID 表 |
 | v2.0-draft.5.4 | 2026-06-15 | 修复横排表分隔行列数不一致导致无法渲染 |
+
+---
+
+## 附录 C：Jetson `rs232_gateway` 混流 RX 与带宽（2026-06-16）
+
+### C.1 现象与定责
+
+| 证据 | 说明 |
+|------|------|
+| F407 `ARB=NORMAL` + `[JETSON BLOB CMD]` | Jetson→MCU 下行 `0x01` 已进仲裁 |
+| TimeSync PING 有 RTT | `0xA5` 双向通 |
+| `link_test --listen-only --blob-v2` 能收 `0x02/0x03` | MCU PA2 上行格式合法 |
+| `launch` 全功能时 topic 空 +「上行超时」 | 同一物理链路，差在 gateway **全双工混流** |
+
+**定责**：MCU RS232 BLOB 阶段可冻结；下一棒在 Jetson `rs232_gateway` 的混流 RX + 上行 watchdog + 115200 带宽管理。
+
+### C.2 115200 带宽估算
+
+8N1 理论峰值：**115200 ÷ 10 ≈ 11520 字节/秒**。
+
+| 方向 | 典型负载（NORMAL） |
+|------|-------------------|
+| Jetson 下行 `0x01` | 50Hz × 23B ≈ 1150 B/s |
+| MCU 上行 `0x02` | 50Hz × 49B ≈ 2450 B/s |
+| MCU 上行 `0x03` | 50Hz × 51B ≈ 2550 B/s |
+| MCU 上行 `0x04/0x06/0x07/0x08` | 按 §0.4 周期叠加 |
+| TimeSync `0xA5` | ~1Hz × 11B（次要） |
+
+双向 BLOB 全速时平均占用可达 **50%～90%** 峰值；**突发**（多帧挤在同一 20ms 窗口）+ USB-TTL 小 FIFO 会导致 ORE/丢字节/解析失步。软件优化与 **降载/提波特率** 需并行。
+
+### C.3 实现状态（`rs232_gateway`）
+
+| 项 | 状态 | 文件 |
+|----|------|------|
+| TX/RX 线程分离（TX 定时器写，RX 独立线程读） | ✅ 已做 | `rs232_gateway_node.py` |
+| 串口写互斥锁 | ✅ 已做 | `serial_io.py` |
+| 硬件流控关闭 `rtscts=False` | ✅ 已做 | `serial_io.py` |
+| BLOB 混流解析：9B 头提前校验 + 坏头 resync | ✅ 已做 | `service_frame.py` |
+| BLOB 模式关闭 V3 `0xAA` 分支 | ✅ 已做 | `Rs232StreamParser(parse_v3=False)` |
+| 上行 watchdog 认 BLOB `0x02/0x03/0x04…` | ✅ 已做 | `_last_blob_uplink_time` |
+| RX 统计 `blob02/03、svc、hdr_rej`（5s 窗口） | ✅ 已做 | `debug_rx_stats_interval_s` |
+| RAW 环形缓冲 + **解析独立线程** | ⏳ 待做 | 当前 RX 线程内仍 `feed()` 解析 |
+
+参考实现（已验证能收上行）：`tools/jetson_rs232_link_test.py` 的 `BlobFrameParser`。
+
+### C.4 错误实现 vs 正确实现（对照）
+
+#### C.4.1 单线程 TX 后立即 RX（旧）
+
+**问题**：50Hz 定时器里 **先 write 再 read+解析**，TX 与 RX 同回调；高负载时读不及时，USB FIFO 溢出。
+
+```python
+# 旧：rs232_gateway_node.py — _tick() 单线程读写
+def _tick(self) -> None:
+    ...
+    self._link.write(frame)                    # 发 0x01 + TimeSync
+    self._tx_seq = (self._tx_seq + 1) & 0xFF
+    raw = self._link.read_available()          # 同线程立刻读
+    for item in self._parser.feed(raw):        # 同线程解析
+        ...
+```
+
+```python
+# 新：TX 仍在 _tick()；RX 独立线程 + 队列，主线程只 dispatch
+def _tick(self) -> None:
+    self._link.write(frame)
+    self._process_rx_queue()                   # 从 queue 取已解析帧
+
+def _rx_loop(self) -> None:                     # 独立线程 rs232_rx
+    raw = self._link.read_available()
+    for item in self._parser.feed(raw):
+        self._rx_queue.put(item)
+```
+
+#### C.4.2 混流解析：等满帧再验头 / 坏 LEN 堵死（旧）
+
+**问题**：旧 parser 仅 `(self._buf[4]<<8)|self._buf[5]` 当 LEN，**不验** `VER/FRAG/CNT/FLAGS`；非法头用错误 LEN **一直等更多字节**，混流时缓冲区失步。BLOB 模式下仍走 V3 `0xAA` 分支。
+
+```python
+# 旧：service_frame.py — Rs232StreamParser.feed()
+if magic == BLOB_MAGIC:
+    payload_len = (self._buf[4] << 8) | self._buf[5]
+    wire_len = BLOB_HDR_LEN + payload_len
+    if len(self._buf) < wire_len:
+        break                              # 坏 LEN → 永久阻塞
+    ...
+    if PAYLOAD_LEN.get(msg_id) != payload_len:
+        continue                           # 丢帧但不记 hdr_reject
+elif magic == FRAME_HEADER:
+    ...                                    # BLOB 模式仍解析 V3
+else:
+    self._buf.pop(0)
+```
+
+```python
+# 新：凑齐 9B 即 validate_rs232_blob_header()；失败 pop(1) resync
+def validate_rs232_blob_header(hdr: bytes) -> tuple[int, int] | None:
+    if hdr[6] != 0 or hdr[7] != 1 or hdr[8] != 0:   # RS232 固定 FRAG
+        return None
+    if PAYLOAD_LEN.get(hdr[2]) != plen:
+        return None
+    return msg_id, plen
+
+# Rs232StreamParser(parse_v3=not use_blob_v2)  # BLOB 模式不抢 0xAA
+validated = validate_rs232_blob_header(hdr)
+if validated is None:
+    self._buf.pop(0)
+    self.stats.hdr_reject += 1
+    continue
+```
+
+#### C.4.3 上行 watchdog 只认 V3 / 与 TimeSync 混用（旧）
+
+**问题**：`_last_uplink_time` 在 V3 `0x02/0x03` 或 BLOB 发布时混刷；BLOB 模式下 TimeSync 通但 **未收到 BLOB 上行** 时，watchdog 行为与 topic 不一致。
+
+```python
+# 旧
+def _check_uplink_stale(self) -> None:
+    if self._last_uplink_time <= 0:
+        return
+    if time.monotonic() - self._last_uplink_time > self._uplink_timeout_s:
+        self.get_logger().warn("上行超时 ... 0x02/0x03")  # BLOB 模式文案不准
+```
+
+```python
+# 新：BLOB 模式单独跟踪 MCU 上行 MSG
+if msg_id in UPLINK_BLOB_MSG_IDS:
+    self._last_blob_uplink_time = time.monotonic()
+
+def _check_uplink_stale(self) -> None:
+    last = self._last_blob_uplink_time if self._use_blob_v2 else self._last_uplink_time
+    ...
+    self.get_logger().warn("上行超时 ... BLOB 0x02/0x03/0x04")
+```
+
+#### C.4.4 串口未关硬件流控 / 无写锁（旧）
+
+**问题**：未接 RTS/CTS 时若开启 `CRTSCTS` 会导致假性阻塞；多线程 write 可能交错。
+
+```python
+# 旧：serial_io.py
+self._ser = serial.Serial(port, baudrate=baud, timeout=0.0)
+def write(self, data: bytes) -> None:
+    self._ser.write(data)
+```
+
+```python
+# 新
+self._ser = serial.Serial(
+    ...,
+    timeout=0.0,
+    dsrdtr=False,
+    rtscts=False,              # 必须关硬件流控
+)
+self._write_lock = threading.Lock()
+def write(self, data: bytes) -> None:
+    with self._write_lock:
+        self._ser.write(data)
+```
+
+### C.5 临时降载（验证带宽 / 混流）
+
+修代码前后均可用：
+
+```bash
+pkill -f rs232_gateway; pkill -f agv_base_driver; sleep 1
+
+# 仅验证 MCU 上行
+python3 tools/jetson_rs232_link_test.py \
+  --port /dev/serial/by-id/usb-Prolific_Technology_Inc._USB-Serial_Controller-if00-port0 \
+  --listen-only --blob-v2 --time 10
+
+# 减轻混流后再 launch
+ros2 launch agv_base_driver jetson_rs232_bringup.launch.py \
+  time_sync_enable:=false \
+  tx_rate_hz:=20 \
+  uplink_timeout_ms:=1000
+```
+
+| 参数 | 作用 |
+|------|------|
+| `time_sync_enable:=false` | 去掉 `0xA5` 混流 |
+| `tx_rate_hz:=20` | 下行约 460B/s，心跳仍满足 MCU 300ms |
+| `uplink_timeout_ms:=1000` | 联调期减少误报 |
+
+验证：`ros2 topic hz /jetson_rs232/v3_status`；gateway 日志 `RX +5s: blob02=… blob03=…`。
+
+### C.6 联调成功标志
+
+| 侧 | 标志 |
+|----|------|
+| F407 | `[JETSON BLOB CMD]`，`ARB=NORMAL` |
+| Jetson | `/jetson_rs232/v3_status` 有频率，`safety_state=1` |
+| gateway | `RX +5s` 中 `blob02>0` 且 `blob03>0`，无持续「上行超时」 |
+
+### C.7 后续待做（Jetson）
+
+1. **RAW RingBuffer + 解析分线程**：RX 线程只 `read()` 入队，解析线程 `feed()`（进一步降低 FIFO 溢出风险）。
+2. **可选**：波特率 **230400**（MCU 同步）或 MCU 按 §0.4 降低 `0x06/0x07/0x08` 频率。
+3. **不建议优先**：双 fd open 同一 tty、CPU SCHED_FIFO（USB-TTL 收益有限）。
+
