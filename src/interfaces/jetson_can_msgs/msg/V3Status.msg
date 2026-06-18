@@ -1,4 +1,5 @@
 # STM32 -> Jetson，CAN ID 0x102，V3 上行状态帧（type=0x02，24 字节组帧后）
+# Topic：/jetson_eth/v3_status、/jetson_rs232/v3_status、/jetson_can/v3_status
 std_msgs/Header header
 
 uint8 seq                         # STM32 发送序号

@@ -1,4 +1,5 @@
-# STM32 -> Jetson，CAN ID 0x109，故障上报（8 字节）
+# STM32 -> Jetson，CAN ID 0x109，故障上报（8 字节，0xA5 服务帧）
+# Topic：/jetson_eth/fault、/jetson_rs232/fault、/jetson_can/fault
 std_msgs/Header header
 
 uint8 fault_code_1                # 故障码 1（见协议统一错误码表）

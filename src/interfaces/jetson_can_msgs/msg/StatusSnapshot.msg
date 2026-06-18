@@ -1,4 +1,5 @@
-# STM32 -> Jetson，CAN ID 0x10B，状态查询响应（8 字节，回复 0x10A 请求）
+# STM32 -> Jetson，CAN ID 0x10B，状态查询响应（8 字节，回复 0x10A）
+# Topic：/jetson_eth/status_snapshot、/jetson_rs232/status_snapshot
 std_msgs/Header header
 
 uint8 safety_state                # 同 V3Status 的 safety_state

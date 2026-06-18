@@ -1,4 +1,5 @@
 # Jetson -> STM32，CAN ID 0x101，V3 下行控制帧（type=0x01，24 字节组帧后）
+# Topic（发布）：/jetson_eth/command、/jetson_rs232/command、/jetson_can/command
 std_msgs/Header header
 
 uint8 seq                         # Jetson 发送序号

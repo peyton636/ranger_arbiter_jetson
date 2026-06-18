@@ -1,5 +1,6 @@
 # AGV 车体综合状态，由 agv_base_driver_node 发布
-# 数据来源：jetson_can_msgs/V3Status(0x102) + V3ExtStatus(0x103) 在 Orin 侧融合
+# 数据来源：V3Status + V3ExtStatus 在 Jetson 侧融合
+# Topic：/vehicle/vehicle_data
 std_msgs/Header header
 
 # --- 运动反馈（来自 V3Status 0x102）---

@@ -1,4 +1,5 @@
 # STM32 -> Jetson，CAN ID 0x104，GPS 帧 A（8 字节，魔数 0xA4）
+# Topic：/jetson_eth/gps/a、/jetson_rs232/gps/a
 std_msgs/Header header
 
 uint8 magic                       # 固定 0xA4

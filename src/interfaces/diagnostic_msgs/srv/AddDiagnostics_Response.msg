@@ -1,10 +1,7 @@
+# AddDiagnostics.srv 响应
 
-
-# True if diagnostic aggregator was updated with new diagnostics, False
-# otherwise. A false return value means that either there is a bond in the
-# aggregator which already used the requested namespace, or the initialization
-# of analyzers failed.
+# true=分析器加载成功；false=命名空间冲突或初始化失败
 bool success
 
-# Message with additional information about the success or failure
+# 成功或失败的说明信息
 string message

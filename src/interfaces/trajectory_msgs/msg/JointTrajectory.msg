@@ -1,11 +1,9 @@
-# The header is used to specify the coordinate frame and the reference time for
-# the trajectory durations
+# 关节空间轨迹（ROS trajectory_msgs 兼容）
+# header 指定坐标系与轨迹时间基准
 std_msgs/Header header
 
-# The names of the active joints in each trajectory point. These names are
-# ordered and must correspond to the values in each trajectory point.
+# 各轨迹点中的关节名，顺序与 JointTrajectoryPoint 中数组一致
 string[] joint_names
 
-# Array of trajectory points, which describe the positions, velocities,
-# accelerations and/or efforts of the joints at each time point.
+# 轨迹点序列：各时刻的位置/速度/加速度/力矩
 JointTrajectoryPoint[] points

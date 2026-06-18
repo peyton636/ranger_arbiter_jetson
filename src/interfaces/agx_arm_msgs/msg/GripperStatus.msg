@@ -1,17 +1,14 @@
-# AgxGripper status feedback message
-
+# Agx 夹爪状态反馈
 std_msgs/Header header
 
-# Gripper status
-float64 width           # Current gripper opening width, unit: m
-float64 force           # Current gripping force, unit: N
+float64 width                       # 当前开口宽度，单位 m
+float64 force                       # 当前夹持力，单位 N
 
-# Driver status
-bool voltage_too_low        # Voltage too low
-bool motor_overheating      # Motor overheating
-bool driver_overcurrent     # Driver overcurrent
-bool driver_overheating     # Driver overheating
-bool sensor_status          # Sensor status
-bool driver_error_status    # Driver error status
-bool driver_enable_status   # Driver enable status
-bool homing_status          # Homing/zero position status
+bool voltage_too_low                # 电压过低
+bool motor_overheating              # 电机过热
+bool driver_overcurrent             # 驱动过流
+bool driver_overheating             # 驱动过热
+bool sensor_status                  # 传感器状态
+bool driver_error_status            # 驱动错误
+bool driver_enable_status           # 驱动使能
+bool homing_status                  # 回零/找原点状态
