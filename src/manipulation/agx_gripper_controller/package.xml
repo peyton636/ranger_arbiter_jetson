@@ -3,18 +3,29 @@
 <package format="3">
   <name>agx_gripper_controller</name>
   <version>0.1.0</version>
-  <description>夹爪闭环控制与夹持判定节点（规划决策层，C++）。</description>
+  <description>夹爪闭环控制与夹持判定节点(规划决策层, C++）。</description>
   <maintainer email="rxp@todo.todo">rxp</maintainer>
   <license>Apache-2.0</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>rosidl_default_generators</buildtool_depend>
 
-  <depend>rclcpp</depend>
-  <depend>sensor_msgs</depend>
-  <depend>agx_arm_msgs</depend>
-  <depend>agx_motion_msgs</depend>
+  <build_depend>rclcpp</build_depend>
+  <build_depend>sensor_msgs</build_depend>
+  <build_depend>agx_arm_msgs</build_depend>
+  <build_depend>agx_motion_msgs</build_depend>
+  <build_depend>rclcpp_lifecycle</build_depend>
+  <build_depend>rclcpp_components</build_depend>
+  <build_depend>lifecycle_msgs</build_depend>
 
   <exec_depend>agx_arm_ctrl</exec_depend>
+  <exec_depend>rclcpp</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>agx_arm_msgs</exec_depend>
+  <exec_depend>agx_motion_msgs</exec_depend>
+  <exec_depend>rclcpp_lifecycle</exec_depend>
+  <exec_depend>rclcpp_components</exec_depend>
+  <exec_depend>lifecycle_msgs</exec_depend>
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>

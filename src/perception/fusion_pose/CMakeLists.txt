@@ -62,8 +62,8 @@ target_link_libraries(${PROJECT_NAME}_components
 # Register Components
 #　＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝=================================
 rclcpp_components_register_node(${PROJECT_NAME}_components
-  PLUGIN "perception::ObjLocalizationNode"
-  EXECUTABLE obj_localization_node
+  PLUGIN "perception::FusionPoseNode"
+  EXECUTABLE fusion_pose_node
 )
 
 install(TARGETS
@@ -78,11 +78,11 @@ install(DIRECTORY include/
 )
 
 install(DIRECTORY launch
-  DESTINATION share/${PROJECT_NAME}/launch
+  DESTINATION share/${PROJECT_NAME}
 )
 
 install(DIRECTORY config
-  DESTINATION share/${PROJECT_NAME}/config
+  DESTINATION share/${PROJECT_NAME}
 )
 
 ament_export_include_directories(include)
