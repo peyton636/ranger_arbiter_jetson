@@ -255,6 +255,7 @@ namespace perception
         pose_array.header.stamp = detections_msg->header.stamp;
         pose_array.header.frame_id = target_frame_.empty() ? camera_frame : target_frame_;
 
+        // RCLCPP_INFO(this->get_logger(), "Processing %zu detections with camera frame '%s'", detections_msg->detections.size(), camera_frame.c_str());
         // 遍历每个检测目标，估计其三维位置
         for (const auto &det : detections_msg->detections)
         {
@@ -284,8 +285,8 @@ namespace perception
                 continue;
             }
 
-            RCLCPP_DEBUG(this->get_logger(), "Detection at pixel (%.1f, %.1f) with depth %.3f m -> 3D point (%.3f, %.3f, %.3f) in target frame",
-                         u, v, depth_m, p_target.x(), p_target.y(), p_target.z());
+            RCLCPP_INFO(this->get_logger(), "class ID %s Detection at pixel (%.1f, %.1f) with depth %.3f m -> 3D point (%.3f, %.3f, %.3f) in target frame",
+                        det.class_id.c_str(), u, v, depth_m, p_target.x(), p_target.y(), p_target.z());
             // 组装输出位姿，当前只填位置，姿态设为单位四元数
             geometry_msgs::msg::Pose pose;
             pose.position.x = p_target.x();
@@ -300,7 +301,7 @@ namespace perception
         }
 
         // 发布结果
-        RCLCPP_DEBUG(this->get_logger(), "Publishing %zu poses", pose_array.poses.size());
+        RCLCPP_INFO(this->get_logger(), "Publishing %zu poses", pose_array.poses.size());
         pose_pub_->publish(pose_array);
     }
 
