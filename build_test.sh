@@ -1,7 +1,14 @@
 #!/usr/bin/env bash
 
 rm -rf build log install
-colcon build --symlink-install --cmake-args -DUSE_CUDA=ON -DCMAKE_EXPORT_COMPILE_COMMANDS=ON --packages-select yolo_detector image_preprocess fusion_pose
+
+# colcon build --cmake-args -DUSE_CUDA=ON \
+#     -DCMAKE_EXPORT_COMPILE_COMMANDS=ON  \
+#     --packages-select yolo_detector \
+
+colcon build --symlink-install --cmake-args -DUSE_CUDA=ON \
+    -DCMAKE_EXPORT_COMPILE_COMMANDS=ON  \
+    --packages-select orbbec_camera yolo_detector image_preprocess fusion_pose \
 
 # 合并 compile_commands.json 供 clangd 使用
 python3 - <<'PYEOF'
@@ -19,6 +26,10 @@ PYEOF
 
 
 source install/setup.bash
+
+# ONNX Runtime CUDA 11.8 + bundled cuDNN 8
+ORT_LIB="${PWD}/src/perception/yolo_detector/YOLOs-CPP/thirdparty/onnxruntime/lib"
+export LD_LIBRARY_PATH="${ORT_LIB}:/usr/local/cuda/lib64:${LD_LIBRARY_PATH:-}"
 
 pids=()
 
@@ -42,10 +53,14 @@ trap cleanup EXIT INT TERM
 start_launch() {
   local cmd="$1"
   echo "[INFO] Starting: ${cmd}"
-  # setsid 启动独立进程组，便于统一关闭
-  setsid bash -c "${cmd}" &
+  # setsid 启动独立进程组，便于统一关闭；显式传递 LD_LIBRARY_PATH 给子进程
+  setsid bash -c "export LD_LIBRARY_PATH='${ORT_LIB}:/usr/local/cuda/lib64:'\${LD_LIBRARY_PATH}; ${cmd}" &
   pids+=("$!")
 }
+
+
+#perception
+start_launch "ros2 launch orbbec_camera gemini_330_series.launch.py"  #camere driver launch
 
 start_launch "ros2 launch image_preprocess preprocess.launch.py"
 # start_launch "ros2 launch yolo_detector classifier.launch.py"
@@ -54,6 +69,8 @@ start_launch "ros2 launch yolo_detector detector.launch.py"
 # start_launch "ros2 launch yolo_detector pose.launch.py"
 # start_launch "ros2 launch yolo_detector segmentor.launch.py"
 start_launch "ros2 launch fusion_pose fusion_pose.launch.py"
+
+# manipulation
 # start_launch "ros2 launch agx_arm_controller arm_controller.launch.py"
 # start_launch "ros2 launch agx_gripper_controller gripper_controller.launch.py"
 # start_launch "ros2 launch agx_motion_planner agx_motion_planner_node.launch.py"

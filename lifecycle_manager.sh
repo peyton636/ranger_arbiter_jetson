@@ -29,8 +29,8 @@ nodes.txt:
   <priority> <node_name>
 example:
   10 /preprocess_node
-  20 /detector_node
-  30 /fusion_pose
+  20 /yolos_detector
+  30 /fusion_pose_node
 EOF
 }
 
