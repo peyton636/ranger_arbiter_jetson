@@ -59,9 +59,13 @@ start_launch() {
 }
 
 
-#perception
-start_launch "ros2 launch orbbec_camera gemini_330_series.launch.py"  #camere driver launch
 
+#=============================================driver==============================================
+# start_launch "ros2 launch orbbec_camera gemini_330_series.launch.py"  #camere driver launch
+
+#=================================================================================================
+
+#==========================================perception=============================================
 start_launch "ros2 launch image_preprocess preprocess.launch.py"
 # start_launch "ros2 launch yolo_detector classifier.launch.py"
 start_launch "ros2 launch yolo_detector detector.launch.py"
@@ -70,10 +74,14 @@ start_launch "ros2 launch yolo_detector detector.launch.py"
 # start_launch "ros2 launch yolo_detector segmentor.launch.py"
 start_launch "ros2 launch fusion_pose fusion_pose.launch.py"
 
-# manipulation
+#=================================================================================================
+
+
+# =========================================manipulation===========================================
 # start_launch "ros2 launch agx_arm_controller arm_controller.launch.py"
 # start_launch "ros2 launch agx_gripper_controller gripper_controller.launch.py"
 # start_launch "ros2 launch agx_motion_planner agx_motion_planner_node.launch.py"
 
+#=================================================================================================
 echo "[INFO] All launches are running. Press Ctrl+C to stop all."
 wait
