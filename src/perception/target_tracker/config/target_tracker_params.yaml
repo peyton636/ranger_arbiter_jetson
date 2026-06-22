@@ -1,0 +1,16 @@
+target_tracker_node:
+  ros__parameters:
+    input_topic: "/perception/object_pose_array"
+    output_topic: "/perception/tracked_object_pose_array"
+    marker_topic: "/perception/tracked_markers"
+    publish_markers: true
+
+    # 关联门控：两帧间位置差小于此值才认为是同一目标 (m)
+    association_distance: 0.15
+    # EMA 系数：越小越平滑，抖动大时可降到 0.2
+    position_alpha: 0.35
+    # 连续命中 min_hits 帧后才输出（抑制单帧噪声）
+    min_hits: 3
+    max_misses: 5
+    track_timeout_sec: 0.5
+    max_tracks: 32

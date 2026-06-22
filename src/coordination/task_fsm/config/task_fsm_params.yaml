@@ -1,0 +1,29 @@
+/** Task FSM parameters ¡ª loaded by task_fsm.launch.py */
+
+task_fsm_node:
+  ros__parameters:
+    plan_request_topic: "/motion/plan_request"
+    execute_feedback_topic: "/motion/execute_feedback"
+    gripper_cmd_topic: "/task/gripper_cmd"
+    gripper_status_topic: "/gripper/status"
+    object_pose_topic: "/perception/object_pose_array"
+    grasp_pose_topic: "/grasp/selected_pose"
+    nav_goal_topic: "/goal_pose"
+    nav_arrived_topic: "/task/nav_arrived"
+    output_frame: "base_link"
+    arm_group: "arm"
+    skip_navigation: true
+    velocity_scaling: 0.15
+    acceleration_scaling: 0.15
+    approach_dist_m: 0.02
+    approach_step_m: 0.005
+    place_retreat_dist_m: 0.03
+    named_home: "home"
+    named_grasp_ready: "grasp_ready"
+    named_pre_grasp: "pre_grasp"
+    named_retreat: "retreat"
+    max_perception_retries: 3
+    max_motion_retries: 2
+    max_gripper_retries: 2
+    max_navigation_retries: 2
+    tick_rate_hz: 10.0
