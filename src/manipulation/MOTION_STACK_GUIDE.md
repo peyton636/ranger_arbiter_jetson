@@ -528,4 +528,26 @@ ros2 launch agx_gripper_controller gripper_controller_node.launch.py
 | 1                    | 闭合  |
 | 2                    | 停止  |
 
+---
+
+## 11. 接口汇总
+
+| No. | Topic Name | Publisher Node | Subscriber Node | Topic Struct（建议） | QoS/频率建议 | Topic Description | Remarks |
+| --- | ---------- | -------------- | --------------- | -------------------- | ------------ | ----------------- | ------- |
+| **agx_motion_msgs 自定义话题** ||||||||
+| 1 | `/motion/plan_request` | `task_fsm_node`（待实现）/ 测试终端 | `motion_planner_node` | `agx_motion_msgs/msg/PlanRequest` | Reliable, depth=10；事件触发 | 运动规划请求：关节/命名位姿/末端位姿/笛卡尔直线 | 本包自定义；`execute=true` 时规划后等待执行结果 |
+| 2 | `/motion/trajectory` | `motion_planner_node` | `arm_controller_node` | `agx_motion_msgs/msg/MotionTrajectory` | Reliable, depth=10；事件触发 | MoveIt 规划得到的关节轨迹 | 本包自定义；内含 `moveit_msgs/RobotTrajectory` |
+| 3 | `/motion/execute_feedback` | `motion_planner_node` | `task_fsm_node`（待实现）/ 监控终端 | `agx_motion_msgs/msg/ExecuteFeedback` | Reliable, depth=10；事件触发 | 规划与执行过程反馈 | 本包自定义；`progress` 0.0~1.0 |
+| 4 | `/motion/execute_result` | `arm_controller_node` | `motion_planner_node`、`task_fsm_node`（待实现） | `agx_motion_msgs/msg/ExecuteResult` | Reliable, depth=10；事件触发 | 轨迹执行最终结果 | 本包自定义 |
+| 5 | `/task/gripper_cmd` | `task_fsm_node`（待实现）/ 测试终端 | `gripper_controller_node` | `agx_motion_msgs/msg/GripperCmd` | Reliable, depth=10；事件触发 | 夹爪控制指令：张开/闭合/停止 | 本包自定义 |
+| 6 | `/gripper/status` | `gripper_controller_node` | `task_fsm_node`（待实现）/ 监控终端 | `agx_motion_msgs/msg/GripperControlStatus` | Reliable, depth=10；事件触发 | 夹爪闭环状态 | 本包自定义；含力/电流双判据 |
+| **感知 / 状态输入** ||||||||
+| 7 | `/grasp/selected_pose` | 感知/定位节点 | `motion_planner_node` | `geometry_msgs/msg/PoseStamped` | Reliable, depth=10；5–10Hz 或按需 | 视觉给出的抓取目标位姿 | ros2 自带 |
+| 8 | `/joint/states` | `arm_controller_node` | `motion_planner_node`（预留） | `sensor_msgs/msg/JointState` | Reliable, depth=10；~200Hz | 当前关节状态（臂控转发） | ros2 自带；预留碰撞检查 |
+| **臂控执行链路** ||||||||
+| 9 | `/feedback/joint_states` | `agx_arm_ctrl_single_node` | `arm_controller_node`、`move_group` | `sensor_msgs/msg/JointState` | Reliable, depth=10；~200Hz | 机械臂真机关节反馈 | ros2 自带 |
+| 10 | `/control/joint_states` | `arm_controller_node`（真机）/ `ros2_control`（仿真） | `agx_arm_ctrl_single_node` / `JointTrajectoryController` | `sensor_msgs/msg/JointState` | Reliable, depth=10；50Hz | 机械臂关节控制指令 | ros2 自带；真机需 `control_enable=true` |
+| **夹爪执行链路** ||||||||
+| 11 | `/feedback/gripper_status` | `agx_arm_ctrl_single_node` | `gripper_controller_node` | `agx_arm_msgs/msg/GripperStatus` | Reliable, depth=10；~200Hz | 夹爪原始硬件反馈 | agx_arm_msgs |
+| 12 | `/control/gripper_joint_states` | `gripper_controller_node` | `agx_arm_ctrl_single_node` | `sensor_msgs/msg/JointState` | Reliable, depth=10；50Hz | 夹爪控制指令 | ros2 自带；避免与臂控话题冲突 |
 

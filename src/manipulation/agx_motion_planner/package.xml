@@ -21,7 +21,7 @@
   <build_depend>rclcpp_components</build_depend>
   <build_depend>lifecycle_msgs</build_depend>
 
-  <exec_depend>agx_arm_moveit</exec_depend>
+  <!-- <exec_depend>agx_arm_moveit</exec_depend> -->
   <exec_depend>rclcpp</exec_depend>
   <exec_depend>sensor_msgs</exec_depend>
   <exec_depend>geometry_msgs</exec_depend>

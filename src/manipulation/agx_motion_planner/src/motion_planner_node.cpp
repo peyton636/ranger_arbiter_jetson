@@ -1,397 +1,592 @@
-/** @file motion_planner_node.cpp
- *  @brief MoveIt2 规划与执行监控节点：
- *         - 订阅规划请求 /motion/plan_request
- *         - 调用 MoveIt2 生成轨迹
- *         - 发布轨迹到 /motion/trajectory 交给 arm_controller 执行
- *         - 订阅 /motion/execute_result 并回传执行状态 /motion/execute_feedback
- */
-
 #include "motion_planner_node.hpp"
 
-// moveit + 任务调度器
+#include <algorithm>
+#include <cmath>
+#include <thread>
+
+#include "rclcpp_components/register_node_macro.hpp"
+
 namespace manipulation
 {
 
-    // PlanRequest::plan_type 支持的规划类型：
-    // JOINT      关节空间规划
-    // POSE       末端位姿规划
-    // NAMED      预设姿态规划
-    // CARTESIAN  笛卡尔直线轨迹规划
-    //
-    // MoveGroupInterface::plan(plan)
-    //   - 生成普通规划轨迹
-    //
-    // computeCartesianPath(...)
-    //   - 只计算笛卡尔轨迹，不直接执行
+MotionPlannerNode::MotionPlannerNode(const rclcpp::NodeOptions & options)
+:rclcpp_lifecycle::LifecycleNode("agx_motion_planner_node", options)
+{
+    RCLCPP_INFO(get_logger(), "agx_motion_planner_node created");
 
-    MotionPlannerNode::MotionPlannerNode(const rclcpp::NodeOptions &options)
-        : LifecycleNode("agx_motion_planner_node", options)
-    {
-        RCLCPP_INFO(get_logger(), "agx_motion_planner_node created");
-        // 声明并读取节点参数
-        declareParameters();
+    //构造函数里只做轻量级工作：参数声明
+    declareParameters();
+}
+
+void MotionPlannerNode::declareParameters()
+{
+    //moveit规划组名称，arm和gripper
+    declare_parameter<std::string>("default_arm_group","arm");
+
+    //接受上层规划请求
+    declare_parameter<std::string>("plan_request_topic", "/motion/plan_request");
+
+    //接收视觉节点输出的抓取位姿
+    declare_parameter<std::string>("grasp_pose_topic", "/grasp/selected_pose");
+
+    //关节状态话题
+    declare_parameter<std::string>("joint_states_topic", "/joint_states");
+
+    //输出给arm_controller_node的轨迹
+    declare_parameter<std::string>("trajectory_topic", "/motion/trajectory");
+
+    //给上层任务节点/app的执行轨迹返回结果
+    declare_parameter<std::string>("execute_feedback_topic","/motion/execute_feedback");
+
+    //arm_controller_node执行完轨迹后返回结果
+    declare_parameter<std::string>("execute_result_topic", "/motion/execute_result");
+
+    //等待机械臂执行结果的超时时间
+    declare_parameter<double>("execute_timeout_sec", 120.0);
+
+    default_arm_group_ = get_parameter("default_arm_group").as_string();
+    execute_timeout_sec_ = get_parameter("execute_timeout_sec").as_double();  
+}
+
+MotionPlannerNode::CallbackReturn MotionPlannerNode::on_configure(const rclcpp_lifecycle::State & state)
+{
+    (void)state;
+    RCLCPP_INFO(get_logger(), "configuring motion planner node");
+
+    //创建发布器
+    feedback_pub_ = create_publisher<ExecuteFeedback>(
+        get_parameter("execute_feedback_topic").as_string(),10);
+    
+    trajectory_pub_ = create_publisher<MotionTrajectory>(
+        get_parameter("trajectory_topic").as_string(),10);
+
+    //创建完之后再判断是否为空
+    if(!feedback_pub_ || !trajectory_pub_){
+        RCLCPP_ERROR(get_logger(), "failed to create publishers");
+        return CallbackReturn::FAILURE;
     }
+    RCLCPP_INFO(get_logger(), "motion planner configured");
+    return CallbackReturn::SUCCESS;
+}
 
-    MotionPlannerNode::CallbackReturn MotionPlannerNode::on_configure(const rclcpp_lifecycle::State &state)
-    {
-        (void)state;
-        RCLCPP_INFO(get_logger(), "agx_motion_planner_node configuring");
+MotionPlannerNode::CallbackReturn MotionPlannerNode::on_activate(const rclcpp_lifecycle::State & state)
+{
+    (void)state;
 
-        // 创建执行反馈发布器：对外发布 planning / executing / success / failed 等状态
-        if (feedback_pub_ == nullptr)
-            return CallbackReturn::FAILURE;
-        feedback_pub_ = create_publisher<ExecuteFeedback>(
-            get_parameter("execute_feedback_topic").as_string(), 10);
+    RCLCPP_INFO(get_logger(), "activating motion planner node");
 
-        // 创建轨迹发布器：将规划结果发给 arm_controller_node
-        if (trajectory_pub_ == nullptr)
-            return CallbackReturn::FAILURE;
-        trajectory_pub_ = create_publisher<MotionTrajectory>(
-            get_parameter("trajectory_topic").as_string(), 10);
-        return CallbackReturn::SUCCESS;
-    }
+    //lifecyclepublisher需要手动激活，否则publish可能不会真正发出去
+    feedback_pub_->on_activate();
+    trajectory_pub_->on_activate();
 
-    MotionPlannerNode::CallbackReturn MotionPlannerNode::on_activate(const rclcpp_lifecycle::State &state)
-    {
-        (void)state;
-        RCLCPP_INFO(get_logger(), "agx_motion_planner_node activating");
-
-        // 订阅规划请求
-        // 订阅执行结果：接收 arm_controller_node 的轨迹执行完成通知
-        execute_result_sub_ = create_subscription<ExecuteResult>(
-            get_parameter("execute_result_topic").as_string(), 10,
-            [this](const ExecuteResult::SharedPtr msg)
-            {
-                std::lock_guard<std::mutex> lock(mutex_);
-                last_execute_result_ = *msg;
-                execute_result_cv_.notify_all();
-            });
-
-        // 订阅关节状态：缓存最新关节状态，供规划起点或调试使用
-        joint_states_sub_ = create_subscription<sensor_msgs::msg::JointState>(
-            get_parameter("joint_states_topic").as_string(), 10,
-            [this](const sensor_msgs::msg::JointState::SharedPtr msg)
-            {
-                std::lock_guard<std::mutex> lock(mutex_);
-                latest_joint_states_ = *msg;
-            });
-
-        // 订阅抓取位姿：如果规划请求中没有提供目标位姿，可以使用最新的抓取位姿作为规划目标
-        // 订阅抓取位姿：若规划请求未显式给 pose_goal，可回退使用最近一次抓取位姿
-        grasp_pose_sub_ = create_subscription<geometry_msgs::msg::PoseStamped>(
-            get_parameter("grasp_pose_topic").as_string(), 10,
-            [this](const geometry_msgs::msg::PoseStamped::SharedPtr msg)
-            {
-                std::lock_guard<std::mutex> lock(mutex_);
-                latest_grasp_pose_ = *msg;
-            });
-
-        // 订阅规划请求：收到请求后开线程执行，避免阻塞 ROS 回调线程
-        plan_request_sub_ = create_subscription<PlanRequest>(
-            get_parameter("plan_request_topic").as_string(), 10,
-            [this](const PlanRequest::SharedPtr msg)
-            {
-                std::thread([this, msg]()
-                            { onPlanRequest(msg); })
-                    .detach();
-            });
-
-        RCLCPP_INFO(get_logger(), "motion_planner_node ready (default group: %s)", default_arm_group_.c_str());
-        return CallbackReturn::SUCCESS;
-    }
-    MotionPlannerNode::CallbackReturn MotionPlannerNode::on_deactivate(const rclcpp_lifecycle::State &state)
-    {
-        (void)state;
-        RCLCPP_INFO(get_logger(), "agx_motion_planner_node deactivating");
-
-        // 先让可能正在等待执行结果的线程尽快退出
+    //订阅arm_controller_node的执行结果
+    execute_result_sub_ = create_subscription<ExecuteResult>(
+        get_parameter("execute_result_topic").as_string(),
+        10,
+        [this](const ExecuteResult::SharedPtr msg)
         {
             std::lock_guard<std::mutex> lock(mutex_);
-            last_execute_result_.reset();
-        }
-        execute_result_cv_.notify_all();
+            //缓存最新执行结果
+            last_execute_result_ = *msg;
+            //唤醒waiForExecuteResult()
+            execute_result_cv_.notify_all();
+        });
 
-        // 断开订阅，避免 deactivate 后继续接收消息
-        plan_request_sub_.reset();
-        execute_result_sub_.reset();
-        joint_states_sub_.reset();
-        grasp_pose_sub_.reset();
-
-        // 释放发布器
-        feedback_pub_.reset();
-        trajectory_pub_.reset();
-
-        RCLCPP_INFO(get_logger(), "agx_motion_planner_node deactivated");
-        return CallbackReturn::SUCCESS;
-    }
-    MotionPlannerNode::CallbackReturn MotionPlannerNode::on_cleanup(const rclcpp_lifecycle::State &state)
-    {
-        (void)state;
-        RCLCPP_INFO(get_logger(), "agx_motion_planner_node cleaning up");
-
+    //订阅关节状态，当前只是缓存，主要用于调试或后期扩展
+    joint_states_sub_ = create_subscription<sensor_msgs::msg::JointState>(
+        get_parameter("joint_states_topic").as_string(),
+        10,
+        [this](const sensor_msgs::msg::JointState::SharedPtr msg)
         {
             std::lock_guard<std::mutex> lock(mutex_);
-            last_execute_result_.reset();
-            latest_grasp_pose_.reset();
-            latest_joint_states_.reset();
-        }
-        execute_result_cv_.notify_all();
+            latest_joint_states_ = *msg;
+        });
 
-        plan_request_sub_.reset();
-        execute_result_sub_.reset();
-        joint_states_sub_.reset();
-        grasp_pose_sub_.reset();
-        feedback_pub_.reset();
-        trajectory_pub_.reset();
-
-        RCLCPP_INFO(get_logger(), "agx_motion_planner_node cleaned up");
-        return CallbackReturn::SUCCESS;
-    }
-    MotionPlannerNode::CallbackReturn MotionPlannerNode::on_shutdown(const rclcpp_lifecycle::State &state)
-    {
-        (void)state;
-        RCLCPP_INFO(get_logger(), "agx_motion_planner_node shutting down");
-
+    //订阅视觉节点提供的抓取位姿
+    grasp_pose_sub_ = create_subscription<geometry_msgs::msg::PoseStamped>(
+        get_parameter("grasp_pose_topic").as_string(),
+        10,
+        [this](const geometry_msgs::msg::PoseStamped::SharedPtr msg)
         {
             std::lock_guard<std::mutex> lock(mutex_);
-            last_execute_result_.reset();
-            latest_grasp_pose_.reset();
-            latest_joint_states_.reset();
-        }
-        execute_result_cv_.notify_all();
+            latest_grasp_pose_ = *msg;
+        });
 
-        plan_request_sub_.reset();
-        execute_result_sub_.reset();
-        joint_states_sub_.reset();
-        grasp_pose_sub_.reset();
-        feedback_pub_.reset();
-        trajectory_pub_.reset();
-
-        RCLCPP_INFO(get_logger(), "agx_motion_planner_node shut down");
-        return CallbackReturn::SUCCESS;
-    }
-    void MotionPlannerNode::declareParameters()
-    {
-        declare_parameter<std::string>("default_arm_group", "arm");
-        declare_parameter<std::string>("plan_request_topic", "/motion/plan_request");
-        declare_parameter<std::string>("grasp_pose_topic", "/grasp/selected_pose");
-        declare_parameter<std::string>("joint_states_topic", "/joint/states");
-        declare_parameter<std::string>("trajectory_topic", "/motion/trajectory");
-        declare_parameter<std::string>("execute_feedback_topic", "/motion/execute_feedback");
-        declare_parameter<std::string>("execute_result_topic", "/motion/execute_result");
-        declare_parameter<double>("execute_timeout_sec", 120.0);
-
-        default_arm_group_ = get_parameter("default_arm_group").as_string();
-        execute_timeout_sec_ = get_parameter("execute_timeout_sec").as_double();
-    }
-
-    void MotionPlannerNode::onPlanRequest(const agx_motion_msgs::msg::PlanRequest::SharedPtr msg)
-    {
-        // 生成request_id，如果请求中没有提供，就用时间戳生成一个唯一的ID
-        const std::string request_id = msg->request_id.empty() ? ("plan_" + std::to_string(now().nanoseconds())) : msg->request_id;
-
-        // 进入规划阶段，发布反馈状态给调用方
-        publishFeedback(request_id, ExecuteFeedback::STATUS_PLANNING, 0.0, "planning");
-
-        // 未指定 group_name 时使用默认规划组
-        const std::string group_name = msg->group_name.empty() ? default_arm_group_ : msg->group_name;
-
-        try
+    //订阅规划请求
+    plan_request_sub_ = create_subscription<PlanRequest>(
+        get_parameter("plan_request_topic").as_string(),
+        10,
+        [this](const PlanRequest::SharedPtr msg)
         {
-            // 为当前 group 创建 MoveIt2 规划接口
-            // MoveGroupInterface 需要 rclcpp::Node::SharedPtr，不能直接传 LifecycleNode::SharedPtr
-            auto moveit_node = std::make_shared<rclcpp::Node>("agx_motion_planner_moveit_client");
-            auto move_group = std::make_shared<moveit::planning_interface::MoveGroupInterface>(
-                moveit_node, group_name);
-
-            // 可选：设置规划器 ID
-            if (!msg->planner_id.empty())
+            std::thread([this, msg]()
             {
-                move_group->setPlannerId(msg->planner_id);
-            }
+                onPlanRequest(msg);
+            }).detach();
+        });
 
-            // 设置速度/加速度缩放系数；若请求值非法则回退到 1.0
-            move_group->setMaxVelocityScalingFactor(
-                msg->max_velocity_scaling > 0.0 ? msg->max_velocity_scaling : 1.0);
-            move_group->setMaxAccelerationScalingFactor(
-                msg->max_acceleration_scaling > 0.0 ? msg->max_acceleration_scaling : 1.0);
+    RCLCPP_INFO(
+        get_logger(),
+        "motion planner activate, defaut group:%s",
+        default_arm_group_.c_str());
+    
+    return CallbackReturn::SUCCESS;
+}
 
-            // 将当前机器人状态作为规划起点
-            move_group->setStartStateToCurrentState();
+MotionPlannerNode::CallbackReturn MotionPlannerNode::on_deactivate(const rclcpp_lifecycle::State & state)
+{
+    (void)state;
+    RCLCPP_INFO(get_logger(), "deactivating motion planner node");
 
-            moveit::planning_interface::MoveGroupInterface::Plan plan;
-            bool plan_ok = false;
+    //取消订阅，避免inactive后续收到请求
+    plan_request_sub_.reset();
+    execute_result_sub_.reset();
+    joint_states_sub_.reset();
+    grasp_pose_sub_.reset();
 
-            switch (msg->plan_type)
-            {
+    //唤醒可能正在等待执行结果的线程
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        last_execute_result_.reset();
+    }
+    execute_result_cv_.notify_all();
+
+    if(feedback_pub_)
+    {
+        feedback_pub_->on_deactivate();
+    }
+
+    if(trajectory_pub_){
+        trajectory_pub_->on_deactivate();
+    }
+
+    planning_busy_ = false;
+
+    RCLCPP_INFO(get_logger(),"motion planner deactivated");
+    return CallbackReturn::SUCCESS;
+}
+
+MotionPlannerNode::CallbackReturn MotionPlannerNode::on_cleanup(const rclcpp_lifecycle::State & state)
+{
+    (void)state;
+
+    RCLCPP_INFO(get_logger(), "cleaning up motion planner node");
+
+    plan_request_sub_.reset();
+    execute_result_sub_.reset();
+    joint_states_sub_.reset();
+    grasp_pose_sub_.reset();
+
+    feedback_pub_.reset();
+    trajectory_pub_.reset();
+
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        last_execute_result_.reset();
+        latest_grasp_pose_.reset();
+        latest_joint_states_.reset();
+    }
+
+    execute_result_cv_.notify_all();
+    planning_busy_ = false;
+
+    RCLCPP_INFO(get_logger(), "motion planner cleaned up");
+    return CallbackReturn::SUCCESS;
+}
+
+MotionPlannerNode::CallbackReturn MotionPlannerNode::on_shutdown(const rclcpp_lifecycle::State & state)
+{
+    (void)state;
+
+    RCLCPP_INFO(get_logger(), "cleaning up motion planner node");
+
+    plan_request_sub_.reset();
+    execute_result_sub_.reset();
+    joint_states_sub_.reset();
+    grasp_pose_sub_.reset();
+
+    feedback_pub_.reset();
+    trajectory_pub_.reset();
+
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        last_execute_result_.reset();
+        latest_grasp_pose_.reset();
+        latest_joint_states_.reset();
+    }
+
+    execute_result_cv_.notify_all();
+    planning_busy_ = false;
+
+    RCLCPP_INFO(get_logger(), "motion planner cleaned up");
+    return CallbackReturn::SUCCESS;
+    
+}
+
+//核心：收到规划请求后怎么处理
+void MotionPlannerNode::onPlanRequest(const PlanRequest::SharedPtr msg)
+{
+    //如果上层没有给request_id, 就用时间戳生成一个
+    const std::string request_id = 
+    msg->request_id.empty()
+    ?("plan_" + std::to_string(now().nanoseconds()))
+    :msg->request_id;
+
+    //防止多个规划任务同时执行
+    bool expected = false;
+    if(!planning_busy_.compare_exchange_strong(expected, true)){
+        RCLCPP_WARN(get_logger(), "planner is busy, reject new request");
+        publishFeedback(request_id, ExecuteFeedback::STATUS_FAILED, 0.0, "planner is busy");
+        return;
+    }
+
+    //函数退出时自动释放busy状态
+    auto reset_busy = [this]()
+    {
+        planning_busy_ = false;
+    };
+
+    try{
+         
+        publishFeedback(
+            request_id,
+            ExecuteFeedback::STATUS_PLANNING,
+            0.0,
+            "planning");
+
+        //没有指定group_name时，使用默认规划组
+        const std::string group_name = 
+            msg->group_name.empty()? default_arm_group_ : msg->group_name;
+
+        RCLCPP_INFO(
+            get_logger(),
+            "received plan request, id=%s, group=%s, type=%u",
+            request_id.c_str(),
+            group_name.c_str(),
+            msg->plan_type);
+
+        //创建Moveit2接口
+        //这一版保持简单：每次请求都创建一次
+        //后期可以优化为on_configure 时创建并复用
+        auto moveit_node = 
+            std::make_shared<rclcpp::Node>("agx_motion_planner_moveit_client");
+
+        moveit::planning_interface::MoveGroupInterface move_group(
+            moveit_node,
+            group_name);
+
+        //设置规划期id
+        if(!msg->planner_id.empty()){
+            move_group.setPlannerId(msg->planner_id);
+        }
+
+        //限制速度缩放范围，避免上层误发2.0、-1.0这种非法值
+        const double velocity_scaling = 
+            std::clamp(msg->max_velocity_scaling, 0.01, 1.0);
+
+        const double acceleration_scaling =
+            std::clamp(msg->max_acceleration_scaling, 0.01, 1.0);
+
+        move_group.setMaxVelocityScalingFactor(velocity_scaling);
+        move_group.setMaxAccelerationScalingFactor(acceleration_scaling);
+
+        //当前机械臂状态作为规划起点
+        move_group.setStartStateToCurrentState();
+
+        moveit::planning_interface::MoveGroupInterface::Plan plan;
+        bool plan_ok = false;
+
+        //根据不同plan_type进入不同规划函数
+        switch(msg->plan_type){
             case PlanRequest::PLAN_TYPE_JOINT:
-                // 关节空间规划：直接设置 joint_goal
-                if (!msg->joint_goal.empty())
-                {
-                    move_group->setJointValueTarget(msg->joint_goal);
-                    plan_ok = (move_group->plan(plan) == moveit::core::MoveItErrorCode::SUCCESS);
-                }
+                plan_ok = planJointTarget(move_group, *msg, plan);
                 break;
 
             case PlanRequest::PLAN_TYPE_NAMED_TARGET:
-                // 预设姿态规划：使用命名 target（需事先在 MoveIt 配置中定义好）
-                if (!msg->named_target.empty())
-                {
-                    move_group->setNamedTarget(msg->named_target);
-                    plan_ok = (move_group->plan(plan) == moveit::core::MoveItErrorCode::SUCCESS);
-                }
+                plan_ok = planNamedTarget(move_group, *msg, plan);
                 break;
 
             case PlanRequest::PLAN_TYPE_POSE:
-            {
-                // 位姿规划：优先使用请求中的 pose_goal；
-                // 若 frame_id 为空且已有缓存抓取位姿，则使用 latest_grasp_pose_ 作为规划目标
-                geometry_msgs::msg::PoseStamped goal = msg->pose_goal;
-                {
-                    std::lock_guard<std::mutex> lock(mutex_);
-                    if (latest_grasp_pose_.has_value() && msg->pose_goal.header.frame_id.empty())
-                    {
-                        goal = latest_grasp_pose_.value();
-                    }
-                }
-                move_group->setPoseTarget(goal);
-                plan_ok = (move_group->plan(plan) == moveit::core::MoveItErrorCode::SUCCESS);
+                plan_ok = planPoseTarget(move_group, *msg, plan, request_id);
                 break;
-            }
 
             case PlanRequest::PLAN_TYPE_CARTESIAN:
-            {
-                // 笛卡尔空间规划：沿指定方向移动末端执行器
-                // 根据当前末端位姿与给定方向/距离，生成单段目标 waypoint 供 computeCartesianPath 计算笛卡尔轨迹
-                std::vector<geometry_msgs::msg::Pose> waypoints;
-                auto current = move_group->getCurrentPose();
-                geometry_msgs::msg::Pose target = current.pose;
-
-                // 修复：request -> msg
-                const auto &dir = msg->cartesian_direction.vector;
-                const double dist = msg->cartesian_max_dist > 0.0 ? msg->cartesian_max_dist : 0.05;
-                target.position.x += dir.x * dist;
-                target.position.y += dir.y * dist;
-                target.position.z += dir.z * dist;
-                waypoints.push_back(target);
-
-                moveit_msgs::msg::RobotTrajectory trajectory;
-                const double step = msg->cartesian_step_size > 0.0 ? msg->cartesian_step_size : 0.01;
-
-                // 计算笛卡尔路径，fraction 越接近 1.0 表示路径覆盖越完整
-                const double fraction = move_group->computeCartesianPath(
-                    waypoints, step, msg->cartesian_min_dist, trajectory);
-                plan_ok = fraction >= 0.95;
-                if (plan_ok)
-                {
-                    plan.trajectory_ = trajectory;
-                }
-                else
-                {
-                    RCLCPP_WARN(
-                        get_logger(), "cartesian path fraction=%.2f (<0.95)", fraction);
-                }
+                plan_ok = planCartesianPath(move_group, *msg, plan);
                 break;
-            }
 
             default:
-                // 未支持的规划类型，直接失败返回
                 publishFeedback(
-                    request_id, ExecuteFeedback::STATUS_FAILED, 0.0,
+                    request_id,
+                    ExecuteFeedback::STATUS_FAILED,
+                    0.0,
                     "unsupported plan_type");
+                reset_busy();
                 return;
-            }
-
-            // 规划失败
-            if (!plan_ok)
-            {
-                publishFeedback(request_id, ExecuteFeedback::STATUS_FAILED, 0.0, "planning failed");
-                return;
-            }
-
-            // 将 MoveIt2 规划结果封装为 MotionTrajectory 消息并发布
-            MotionTrajectory traj_msg;
-            traj_msg.header.stamp = now();
-            traj_msg.request_id = request_id;
-            traj_msg.trajectory = plan.trajectory_;
-            trajectory_pub_->publish(traj_msg); // 发布轨迹，让arm_controller_node执行/motion/trajectory
-
-            // 规划完成，轨迹已发出，进入执行阶段
-            publishFeedback(request_id, ExecuteFeedback::STATUS_PLANNED, 0.5, "trajectory published");
-
-            // 若仅规划不执行，则直接返回成功
-            if (!msg->execute)
-            {
-                publishFeedback(request_id, ExecuteFeedback::STATUS_SUCCEEDED, 1.0, "plan only");
-                return;
-            }
-
-            // 清空上一次执行结果，避免误匹配
-            {
-                std::lock_guard<std::mutex> lock(mutex_);
-                last_execute_result_.reset();
-            }
-
-            // 进入执行等待阶段：等待 arm_controller_node 在 /motion/execute_result 返回结果
-            publishFeedback(request_id, ExecuteFeedback::STATUS_EXECUTING, 0.6, "waiting arm_controller");
-            const bool success = waitForExecuteResult(request_id); // 等待arm_controller_node执行完成，他会监听/motion/execute_result
-
-            // 根据执行结果发布最终反馈
+        }
+        
+        if(!plan_ok){
             publishFeedback(
                 request_id,
-                success ? ExecuteFeedback::STATUS_SUCCEEDED : ExecuteFeedback::STATUS_FAILED,
-                success ? 1.0 : 0.0,
-                success ? "execution succeeded" : "execution failed");
+                ExecuteFeedback::STATUS_FAILED,
+                0.0,
+                "planning failed");
+            reset_busy();
+            return;
         }
-        catch (const std::exception &e)
+
+        publishFeedback(
+            request_id,
+            ExecuteFeedback::STATUS_PLANNED,
+            0.5,
+            "planning succeeded");
+
+        //很重要：
+        //如果只是规划不执行，不应该把轨迹发给执行器
+        if(!msg->execute){
+            publishFeedback(
+                request_id,
+                ExecuteFeedback::STATUS_SUCCEEDED,
+                1.0,
+                "plan only");
+            reset_busy();
+            return;
+        }
+
+        //执行前先清空旧结果，避免误匹配上一次执行结果
         {
-            // MoveIt2 初始化或规划过程中抛异常时，统一回传失败状态和异常信息
-            RCLCPP_ERROR(get_logger(), "plan request failed: %s", e.what());
-            publishFeedback(request_id, ExecuteFeedback::STATUS_FAILED, 0.0, e.what());
+            std::lock_guard<std::mutex> lock(mutex_);
+            last_execute_result_.reset();
         }
+
+        //封装轨迹消息
+        MotionTrajectory traj_msg;
+        traj_msg.header.stamp = now();
+        traj_msg.request_id = request_id;
+        traj_msg.trajectory = plan.trajectory_;
+
+        //发布轨迹给arm_controller_node
+        trajectory_pub_->publish(traj_msg);
+
+        publishFeedback(
+            request_id,
+            ExecuteFeedback::STATUS_EXECUTING,
+            0.6,
+            "trajectory published, waiting for execution result");
+
+        //等待arm_controller_node 返回执行结果
+        const bool success = waitForExecuteResult(request_id);
+
+        publishFeedback(
+            request_id,
+            success ? ExecuteFeedback::STATUS_SUCCEEDED : ExecuteFeedback::STATUS_FAILED,
+            success ? 1.0 : 0.0,
+            success ? "execution succeeded" : "excution faild");
+
+        reset_busy();
     }
+    catch(const std::exception & e){
+        RCLCPP_ERROR(get_logger(), "plan request exception: %s", e.what());
+        publishFeedback(request_id, ExecuteFeedback::STATUS_FAILED, 0.0, e.what());
 
-    void MotionPlannerNode::publishFeedback(const std::string &request_id, uint8_t status, float progress, const std::string &message)
-    {
-        // 统一封装执行反馈消息
-        ExecuteFeedback msg;
-        msg.header.stamp = now();
-        msg.request_id = request_id;
-        msg.status = status;
-        msg.progress = progress;
-        msg.message = message;
-        feedback_pub_->publish(msg);
+        //这里没有request_id的话也至少打印错误
+        planning_busy_ = false;
     }
+}
 
-    bool MotionPlannerNode::waitForExecuteResult(const std::string &request_id)
-    {
-        // 在超时时间内等待 execute_result_sub_ 收到对应 request_id 的执行结果
-        const auto deadline = std::chrono::steady_clock::now() +
-                              std::chrono::duration<double>(execute_timeout_sec_);
+//关节规划
+bool MotionPlannerNode::planJointTarget(
+    moveit::planning_interface::MoveGroupInterface & move_group,
+    const PlanRequest & request,
+    moveit::planning_interface::MoveGroupInterface::Plan & plan)
+{
+    if(request.joint_goal.empty()){
+        RCLCPP_ERROR(get_logger(), "joint_goal is empty");
+        return false;
+    }
+    //给moveit设置目标关节
+    move_group.setJointValueTarget(request.joint_goal);
+    //调用Moveit规划
+    const auto result = move_group.plan(plan);
+    return result == moveit::core::MoveItErrorCode::SUCCESS;
+}
 
-        std::unique_lock<std::mutex> lock(mutex_);
-        while (rclcpp::ok())
-        {
-            if (last_execute_result_.has_value() &&
-                last_execute_result_->request_id == request_id)
-            {
-                return last_execute_result_->success;
-            }
-            if (execute_result_cv_.wait_until(lock, deadline) == std::cv_status::timeout)
-            {
-                RCLCPP_ERROR(get_logger(), "execute timeout for request_id=%s", request_id.c_str());
-                return false;
-            }
-        }
+//预设姿态规划
+bool MotionPlannerNode::planNamedTarget(
+    moveit::planning_interface::MoveGroupInterface & move_group,
+    const PlanRequest & request,
+    moveit::planning_interface::MoveGroupInterface::Plan & plan)
+{
+    if(request.named_target.empty()){
+        RCLCPP_ERROR(get_logger(), "named_target is empty");
         return false;
     }
 
-    // moveit_msgs::msg::RobotTrajectory MotionPlannerNode::planToPose(const geometry_msgs::msg::PoseStamped &target_pose)
-    // {
-    //     return moveit_msgs::msg::RobotTrajectory();
-    // }
+    //named_target必须再Moveit SRFD 里提前配置
+    move_group.setNamedTarget(request.named_target);
+    const auto result = move_group.plan(plan);
+    return result == moveit::core::MoveItErrorCode::SUCCESS;
+}
+
+//末端规划
+bool MotionPlannerNode::planPoseTarget(
+    moveit::planning_interface::MoveGroupInterface & move_group,
+    const PlanRequest & request,
+    moveit::planning_interface::MoveGroupInterface::Plan & plan,
+    const std::string & request_id)
+{
+    geometry_msgs::msg::PoseStamped goal = request.pose_goal;
+
+    //如果请求里没有pose_goal, 就尝试使用最近的一次视觉抓取位姿
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+
+        if(goal.header.frame_id.empty() && latest_grasp_pose_.has_value()){
+            goal = latest_grasp_pose_.value();
+            RCLCPP_INFO(get_logger(), "use latest grasp pose as pose target");
+        }
+    }
+
+    //必须检查frame_id
+    //没有frame_id moveit不知道这个目标时camera_link, arm_base,还是map下的
+    if(goal.header.frame_id.empty()){
+        publishFeedback(
+            request_id,
+            ExecuteFeedback::STATUS_FAILED,
+            0.0,
+            "pose goal frame_id is empty");
+        
+        return false;
+    }
+    //设置末端目标位姿
+    move_group.setPoseTarget(goal);
+    const auto result = move_group.plan(plan);
+    //清除目标，避免影响下一次规划
+    move_group.clearPoseTargets();
+    return result==moveit::core::MoveItErrorCode::SUCCESS;
+  
+}
+
+//笛卡尔规划
+bool MotionPlannerNode::planCartesianPath(
+    moveit::planning_interface::MoveGroupInterface & move_group,
+    const PlanRequest & request,
+    moveit::planning_interface::MoveGroupInterface::Plan & plan)
+{
+    //获取当前末端位姿
+    const auto current_pose = move_group.getCurrentPose();
+
+    geometry_msgs::msg::Pose target_pose = current_pose.pose;
+    const auto & dir = request.cartesian_direction.vector;
+    /*
+        比如你要夹爪向下靠近物体，可以设置：
+        direction = [0, 0, -1]
+        distance = 0.05
+        意思是末端沿 z 轴下降 5cm。
+        注意：最好时单位方向向量，长度为1
+    */ 
+    //计算方向向量长度
+    const double norm = std::sqrt(
+        dir.x * dir.x +
+        dir.y * dir.y +
+        dir.z * dir.z);
+
+    if(norm < 1e-6){
+        RCLCPP_ERROR(get_logger(), "cartesian direction is zero");
+        return false;
+    }
+
+    //距离默认5cm
+    const double dist = 
+        request.cartesian_max_dist > 0.0 ? request.cartesian_max_dist : 0.05;
+
+    //归一化方向，避免[0,0,-10]导致移动50cm
+    target_pose.position.x += dir.x / norm * dist;
+    target_pose.position.y += dir.y / norm * dist;
+    target_pose.position.z += dir.z / norm * dist;
+
+    std::vector<geometry_msgs::msg::Pose> waypoints;
+    waypoints.push_back(target_pose);
+
+    moveit_msgs::msg::RobotTrajectory trajectory;
+
+    //插值步长，默认1cm
+    const double step = 
+        request.cartesian_step_size>0.0 ? request.cartesian_step_size : 0.01;
+
+    //原来代码中的catesian_min_dist 命名不像jump_threshold 后面要检查msg定义,下面暂时按照原文件的cartesian_min_dist
+    //const double jump_threshold = 0.0;
+
+    const double fraction = move_group.computeCartesianPath(
+        waypoints,
+        step,
+        request.cartesian_min_dist,
+        trajectory);
+
+    RCLCPP_INFO(get_logger(),"cartesian path fraction : %.3f", fraction);
+
+    if(fraction < 0.95){
+        RCLCPP_ERROR(get_logger(), "catesian path planning incomplete");
+        return false;
+    }
+
+    plan.trajectory_ = trajectory;
+    return true;
 
 }
 
-#include "rclcpp_components/register_node_macro.hpp"
+//反馈发布函数
+void MotionPlannerNode::publishFeedback(
+    const std::string & request_id,
+    uint8_t status,
+    float progress,
+    const std::string & message)
+{
+    if(!feedback_pub_){
+        RCLCPP_WARN(get_logger(),"feedback publisher is null");
+        return;
+    }
+
+    ExecuteFeedback msg;
+    msg.header.stamp = now();
+    msg.request_id = request_id;
+    msg.status = status;
+    msg.progress = progress;
+    msg.message = message;
+
+    feedback_pub_->publish(msg);
+}
+
+//等待执行结果
+bool MotionPlannerNode::waitForExecuteResult(const std::string & request_id)
+{
+    const auto deadline =
+        std::chrono::steady_clock::now() +
+        std::chrono::duration<double>(execute_timeout_sec_);
+
+    std::unique_lock<std::mutex> lock(mutex_);
+
+    while(rclcpp::ok()){
+        if(last_execute_result_.has_value()){
+            const auto & result = last_execute_result_.value();
+
+            //必须request_id一直，才认为是这次任务的执行结果
+            if(result.request_id == request_id){
+                return result.success;
+            }
+        }
+
+        const auto wait_status = execute_result_cv_.wait_until(lock, deadline);
+
+        if(wait_status == std::cv_status::timeout){
+            RCLCPP_ERROR(
+                get_logger(),
+                "execute timeout, request_id=%s",
+                request_id.c_str());
+                return false;
+        }
+    }
+    return false;
+}
+
+}
+
 RCLCPP_COMPONENTS_REGISTER_NODE(manipulation::MotionPlannerNode)

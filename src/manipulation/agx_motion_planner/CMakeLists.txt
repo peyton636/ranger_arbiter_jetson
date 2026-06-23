@@ -46,7 +46,7 @@ ament_target_dependencies(${PROJECT_NAME}_components
 # Register Components
 #　＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝=================================
 rclcpp_components_register_node(${PROJECT_NAME}_components
-  PLUGIN "manipulation::AgxMotionPlannerNode"
+  PLUGIN "manipulation::MotionPlannerNode"
   EXECUTABLE agx_motion_planner_node
 )
 
