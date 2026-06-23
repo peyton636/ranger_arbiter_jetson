@@ -16,13 +16,19 @@ ros2_control仿真地盘/机械臂描述
 """
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, ExecuteProcess, IncludeLaunchDescription,TimerAction
+from launch.actions import DeclareLaunchArgument, ExecuteProcess,EmitEvent,RegisterEventHandler, IncludeLaunchDescription,TimerAction
 from launch.conditions import IfCondition
+from launch.event_handlers import OnProcessStart
+from launch.events import matches_action
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 
-from launch_ros.actions import Node
+from launch_ros.actions import LifecycleNode
+from launch_ros.event_handlers import OnStateTransition
+from launch_ros.events.lifecycle import ChangeState
 from launch_ros.substitutions import FindPackageShare
+
+from lifecycle_msgs.msg import Transition
 
 def generate_launch_description():
     #1.参数
@@ -56,8 +62,9 @@ def generate_launch_description():
         description='日志等级'
     )
 
-    params_file_arg = DeclareLaunchArgument(
-        'params_file',
+    #注意这里不要叫params_file, 避免木然arm/gripper子launch
+    motion_planner_params_file_arg = DeclareLaunchArgument(
+        'motion_planner_params_file',
         default_value=PathJoinSubstitution([
             FindPackageShare('agx_motion_planner'),
             'config',
@@ -66,14 +73,35 @@ def generate_launch_description():
         description='motion planner 参数文件'
     )
 
+    arm_controller_params_file_arg = DeclareLaunchArgument(
+        'arm_controller_params_file',
+        default_value=PathJoinSubstitution([
+            FindPackageShare('agx_arm_controller'),
+            'config',
+            'arm_controller_params.yaml',
+        ]),
+        description='arm controller 参数文件'
+    )
+
+    gripper_controller_params_file_arg = DeclareLaunchArgument(
+        'gripper_controller_params_file',
+        default_value=PathJoinSubstitution([
+            FindPackageShare('agx_gripper_controller'),
+            'config',
+            'gripper_controller_params.yaml',
+        ]),
+        description='gripper controller 参数文件'
+    )
+
     #2.启动motion planner 这里启动的是cmakelists.txt 注册出来的executable, agx_motion_planner_node
-    motion_planner_node = Node(
+    motion_planner_node = LifecycleNode(
         package='agx_motion_planner',
         executable='agx_motion_planner_node',
         name='agx_motion_planner_node',
+        namespace='',
         output='screen',
         parameters=[
-            LaunchConfiguration('params_file'),
+            LaunchConfiguration('motion_planner_params_file'),
             {
                 'use_sim_time':LaunchConfiguration('use_sim_time'),
             },
@@ -85,75 +113,78 @@ def generate_launch_description():
         ],
     )
 
-    #3.启动arm controller 仿真follow=false
-    arm_controller_launch = TimerAction(
-        period=1.0,
-        actions=[
-            IncludeLaunchDescription(
-                PythonLaunchDescriptionSource(
-                    PathJoinSubstitution([
-                        FindPackageShare('agx_arm_controller'),
-                        'launch',
-                        'arm_controller_node.launch.py',
-                    ])
-                ),
-                launch_arguments={
-                    'follow':'false',
-                }.items(),
-            )
-        ],
+    #3.启动arm controller 仿真follow=false 显示传containner_name,避免和girpper或其他容器重名
+    arm_controller_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            PathJoinSubstitution([
+                FindPackageShare('agx_arm_controller'),
+                'launch',
+                'agx_arm_controller_node.launch.py',
+            ])
+        ),
+        launch_arguments={
+            'follow':'false',
+            'params_file':LaunchConfiguration('arm_controller_params_file'),
+            'container_name':'arm_controller_container',
+            'use_sim_time':LaunchConfiguration('use_sim_time'),
+            'log_level':LaunchConfiguration('log_level'),
+        }.items(),
         condition=IfCondition(LaunchConfiguration('start_arm_controller')),
     )
 
-    #4.启动gripper controller
-    gripper_controller_launch = TimerAction(
-        period=1.0,
-        actions=[
-            IncludeLaunchDescription(
-                PythonLaunchDescriptionSource(
-                    PathJoinSubstitution([
-                        FindPackageShare('agx_gripper_controller'),
-                        'launch',
-                        'gripper_controller_node.launch.py',
-                    ])
-                )
-            )
-        ],
+
+    #4.启动gripper controller,显示传
+    gripper_controller_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            PathJoinSubstitution([
+                FindPackageShare('agx_gripper_controller'),
+                'launch',
+                'agx_gripper_controller_node.launch.py',
+            ])
+        ),
+        launch_arguments={
+            'params_file':LaunchConfiguration('gripper_controller_params_file'),
+            'container_name': 'gripper_controller_container',
+            'use_sim_time':LaunchConfiguration('use_sim_time'),
+            'log_level':LaunchConfiguration('log_level'),
+        }.items(),
         condition=IfCondition(LaunchConfiguration('start_gripper_controller')),
     )
 
     #5.自动激活lifecycle
-    configure_motion_planner = TimerAction(
-        period=2.0,
-        actions=[
-            ExecuteProcess(
-                cmd=[
-                    'ros2',
-                    'lifecycle',
-                    'set',
-                    '/agx_motion_planner_node',
-                    'configure',
-                ],
-                output='screen',
-            )
-        ],
+    configure_motion_planner = RegisterEventHandler(
+        OnProcessStart(
+            target_action=motion_planner_node,
+            on_start=[
+                TimerAction(
+                    period=3.0,
+                    actions=[
+                        EmitEvent(
+                            event=ChangeState(
+                                lifecycle_node_matcher=matches_action(motion_planner_node),
+                                transition_id=Transition.TRANSITION_CONFIGURE,
+                            )
+                        )
+                    ],
+                )
+            ],
+        ),
         condition=IfCondition(LaunchConfiguration('autostart')),
     )
 
-    activate_motion_planner = TimerAction(
-        period=4.0,
-        actions=[
-            ExecuteProcess(
-                cmd=[
-                    'ros2',
-                    'lifecycle',
-                    'set',
-                    '/agx_motion_planner_node',
-                    'activate',
-                ],
-                output='screen',
-            )
-        ],
+    activate_motion_planner = RegisterEventHandler(
+        OnStateTransition(
+            target_lifecycle_node=motion_planner_node,
+            goal_state='inactive',
+            entities=[
+                EmitEvent(
+                    event=ChangeState(
+                        lifecycle_node_matcher=matches_action(motion_planner_node),
+                        transition_id=Transition.TRANSITION_ACTIVATE
+                    )
+                )
+            ],
+        ),
         condition=IfCondition(LaunchConfiguration('autostart')),
     )
 
@@ -163,11 +194,15 @@ def generate_launch_description():
         start_arm_controller_arg,
         start_gripper_controller_arg,
         log_level_arg,
-        params_file_arg,
+        motion_planner_params_file_arg,
+        arm_controller_params_file_arg,
+        gripper_controller_params_file_arg,
 
         motion_planner_node,
-        arm_controller_launch,
-        gripper_controller_launch,
+
+        TimerAction(period=1.0, actions=[arm_controller_launch]),
+        TimerAction(period=1.0, actions=[gripper_controller_launch]),
+
         configure_motion_planner,
         activate_motion_planner,
     ])
