@@ -1,0 +1,18 @@
+imu_adapter:
+  ros__parameters:
+    # WIT IMU 串口
+    port: "/dev/imu_usb"
+    baud: 9600
+    frame_id: "base_link"
+
+    # 发布话题（相对 namespace）
+    imu_topic: "imu/data"
+    mag_topic: "imu/mag"
+
+    # 与 MCU 网关 time_sync 对齐（link_type 决定默认 topic）
+    link_type: "eth"
+    time_sync_topic: ""
+    use_time_sync_stamp: true
+
+    # 串口轮询周期 (s)
+    poll_period_s: 0.01

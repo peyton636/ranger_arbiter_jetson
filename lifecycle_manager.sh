@@ -9,6 +9,18 @@ STRICT_MISSING="${STRICT_MISSING:-0}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 NODES_FILE="${SCRIPT_DIR}/nodes.txt"
 
+# 与机器人保持同一 ROS_DOMAIN_ID
+if [[ -f "${SCRIPT_DIR}/install/share/cangyi_bringup/scripts/ros_env.sh" ]]; then
+  # shellcheck disable=SC1091
+  source "${SCRIPT_DIR}/install/share/cangyi_bringup/scripts/ros_env.sh"
+elif [[ -f "${SCRIPT_DIR}/src/bringup/cangyi_bringup/scripts/ros_env.sh" ]]; then
+  # shellcheck disable=SC1091
+  source "${SCRIPT_DIR}/src/bringup/cangyi_bringup/scripts/ros_env.sh"
+else
+  export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-10}"
+  export ROS_LOCALHOST_ONLY="${ROS_LOCALHOST_ONLY:-0}"
+fi
+
 usage() {
   cat <<'EOF'
 Usage:
