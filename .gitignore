@@ -4,3 +4,14 @@
 build/
 install/
 log/
+
+# ONNX Runtime / cuDNN 二进制（>100MB，本地保留，勿提交 GitHub）
+src/perception/yolo_detector/YOLOs-CPP/thirdparty/onnxruntime/lib/*.so
+src/perception/yolo_detector/YOLOs-CPP/thirdparty/onnxruntime/lib/*.so.*
+
+# STM32 / Keil 编译产物
+**/Obj/
+**/*.o
+**/*.axf
+**/*.hex
+**/*.map
