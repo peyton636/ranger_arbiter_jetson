@@ -9,6 +9,8 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 find_package(ament_cmake REQUIRED)
+find_package(ament_cmake_python REQUIRED)
+find_package(rclpy REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_lifecycle REQUIRED)
 find_package(rclcpp_components REQUIRED)
@@ -61,6 +63,10 @@ install(DIRECTORY include/
 
 install(DIRECTORY launch config
   DESTINATION share/${PROJECT_NAME}
+)
+
+ament_python_install_package(${PROJECT_NAME}
+  SCRIPTS_DESTINATION lib/${PROJECT_NAME}
 )
 
 ament_export_include_directories(include)

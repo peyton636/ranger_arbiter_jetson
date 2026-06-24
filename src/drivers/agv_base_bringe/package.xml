@@ -2,12 +2,13 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>agv_base_driver</name>
-  <version>0.2.0</version>
-  <description>AGV base bridge: /cmd_vel to V3Command, VehicleData and odom</description>
+  <version>0.3.0</version>
+  <description>AGV base bridge: RS232 lifecycle node + Ethernet UDP BLOB + GUI</description>
   <maintainer email="rxp@todo.todo">rxp</maintainer>
   <license>MIT</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>ament_cmake_python</buildtool_depend>
 
   <build_depend>rclcpp</build_depend>
   <build_depend>rclcpp_lifecycle</build_depend>
@@ -19,6 +20,8 @@
   <build_depend>jetson_mcu_msgs</build_depend>
   <build_depend>scr_sensor</build_depend>
   <build_depend>lifecycle_msgs</build_depend>
+  <build_depend>rclpy</build_depend>
+  <build_depend>sensor_msgs</build_depend>
 
   <exec_depend>rclcpp</exec_depend>
   <exec_depend>rclcpp_lifecycle</exec_depend>
@@ -30,8 +33,8 @@
   <exec_depend>jetson_mcu_msgs</exec_depend>
   <exec_depend>scr_sensor</exec_depend>
   <exec_depend>lifecycle_msgs</exec_depend>
-  <exec_depend>eth_gateway</exec_depend>
-  <exec_depend>gps_rs232_to_fix</exec_depend>
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

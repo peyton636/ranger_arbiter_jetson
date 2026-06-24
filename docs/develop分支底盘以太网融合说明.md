@@ -11,9 +11,9 @@
 | 项目 | `peng` 分支（旧） | `develop` 分支（现用） |
 |------|-------------------|------------------------|
 | 底盘业务（以太网） | Python 单节点 | **`agv_base_eth_bringe`**（UDP + 融合，单节点） |
-| 以太网 UDP | 合并在业务节点内 | **`eth_gateway` 库**（`McuEthBridge`，默认不对外发 Topic） |
+| 以太网 UDP | 合并在业务节点内 | **`agv_base_driver`** 内 `McuEthBridge` 模块（默认不对外发 Topic） |
 | GPS | 同包发布 `/fix` | 集成在 **`agv_base_eth_bringe`**（`gps_enable:=true`） |
-| GUI | 同包 `cmd_vel_gui` | **`eth_gateway`** 包（entry: `cmd_vel_gui`） |
+| GUI | 同包 `cmd_vel_gui` | **`agv_base_driver`** 包（entry: `cmd_vel_gui`） |
 | 消息接口 | `jetson_can_msgs`（旧名） | **`jetson_mcu_msgs`** |
 | 对外业务消息 | 分散多个 Topic | **`scr_sensor`**：`AgvControl` / `VehicleData` / `AgvFeatureStatus` |
 | ROS 包名 | `agv_base_driver` | 目录 `agv_base_bringe/`，包名 **`agv_base_driver`** |
@@ -35,7 +35,7 @@ agv_base_eth_bringe（单 Python 节点）
 
 RS232 链路：仍用 C++ agv_base_bringe_node（link_type=rs232）
 Nav2：须发 /agv_control（cmd_vel_compat 已关闭）
-联调旧协议：eth_gateway.launch.py + ros_uplink_publish:=true
+联调旧协议：`agv_base_driver/launch/eth_gateway.launch.py` + `ros_uplink_publish:=true`
 ```
 
 ### 1.2 对外业务 Topic
@@ -79,14 +79,14 @@ Launch 文件：
 
 ### 2.1 每次改代码后必须重新编译
 
-改了 `.msg`、`agv_base_eth_bringe`、launch 或 `eth_gateway` 后，**必须** `colcon build` 再 `source`，否则运行的仍是旧 install。
+改了 `.msg`、`agv_base_eth_bringe` 或 launch 后，**必须** `colcon build` 再 `source`，否则运行的仍是旧 install。
 
 ```bash
 cd ~/catkin_ws/cangyirobot
 source /opt/ros/humble/setup.bash
 
-colcon build --symlink-install --allow-overriding eth_gateway \
-  --packages-select scr_sensor agv_base_driver eth_gateway
+colcon build --symlink-install \
+  --packages-select scr_sensor agv_base_driver
 
 source ~/catkin_ws/cangyirobot/install/setup.bash
 ```
@@ -94,8 +94,8 @@ source ~/catkin_ws/cangyirobot/install/setup.bash
 首次恢复 develop 或缺包时，可编更多包：
 
 ```bash
-colcon build --symlink-install --allow-overriding eth_gateway \
-  --packages-select jetson_mcu_msgs scr_sensor eth_gateway gps_rs232_to_fix agv_base_driver
+colcon build --symlink-install \
+  --packages-select jetson_mcu_msgs scr_sensor agv_base_driver
 source install/setup.bash
 ```
 
@@ -277,7 +277,7 @@ sudo apt install ros-humble-foxglove-bridge
 **需要看原始 BLOB 联调时：**
 
 ```bash
-ros2 launch eth_gateway eth_gateway.launch.py ros_uplink_publish:=true
+ros2 launch agv_base_driver eth_gateway.launch.py ros_uplink_publish:=true
 ```
 
 ---
@@ -376,22 +376,23 @@ ros2 daemon stop
 
 | ROS 包 | 可执行文件 | 节点名 | 用途 |
 |--------|-----------|--------|------|
-| `eth_gateway` | `agv_base_eth_bringe` | `agv_base_bringe` | **以太网生产节点**（UDP + 4 Topic + /fix） |
-| `eth_gateway` | `cmd_vel_gui` | `cmd_vel_gui` | Tk 遥控 GUI → `/agv_control` |
-| `eth_gateway` | `eth_gateway` | `eth_gateway` | **仅联调**（`ros_uplink_publish:=true`） |
+| `agv_base_driver` | `agv_base_eth_bringe` | `agv_base_bringe` | **以太网生产节点**（UDP + 4 Topic + /fix） |
+| `agv_base_driver` | `cmd_vel_gui` | `cmd_vel_gui` | Tk 遥控 GUI → `/agv_control` |
+| `agv_base_driver` | `eth_gateway` | `eth_gateway` | **仅联调**（`ros_uplink_publish:=true`） |
 | `agv_base_driver` | `agv_base_bringe_node` | `agv_base_bringe` | RS232 等 C++ lifecycle 节点 |
-| `gps_rs232_to_fix` | `gps_to_fix` | `gps_to_fix` | 旧 GPS 节点（以太网已集成，可不启） |
 
-主要源码：
+主要源码（均在 `src/drivers/agv_base_bringe/`）：
 
-- `src/drivers/eth_gateway/eth_gateway/agv_base_eth_bringe_node.py` — 以太网生产节点
-- `src/drivers/eth_gateway/eth_gateway/mcu_eth_bridge.py` — UDP BLOB + TimeSync
-- `src/drivers/eth_gateway/eth_gateway/chassis_fusion.py` — 缓存 → VehicleData / FeatureStatus
-- `src/drivers/eth_gateway/eth_gateway/gps_fix.py` — GPS → `/fix`
-- `src/drivers/eth_gateway/eth_gateway/blob_topic_pub.py` — `ros_uplink_publish` 开关
-- `src/drivers/eth_gateway/eth_gateway/udp_link.py` — 单 socket 绑定源 IP
-- `src/drivers/eth_gateway/eth_gateway/cmd_vel_gui_node.py` — GUI → `/agv_control`
+- `agv_base_driver/agv_base_eth_bringe_node.py` — 以太网生产节点
+- `agv_base_driver/mcu_eth_bridge.py` — UDP BLOB + TimeSync
+- `agv_base_driver/chassis_fusion.py` — 缓存 → VehicleData / FeatureStatus
+- `agv_base_driver/gps_fix.py` — GPS → `/fix`
+- `agv_base_driver/blob_topic_pub.py` — `ros_uplink_publish` 开关
+- `agv_base_driver/udp_link.py` — 单 socket 绑定源 IP
+- `agv_base_driver/cmd_vel_gui_node.py` — GUI → `/agv_control`
 - `src/interfaces/scr_sensor/msg/*.msg` — 对外业务消息
+
+> **2026-06-24 更新**：`eth_gateway`、`gps_rs232_to_fix` 两个独立包已删除，功能全部并入 `agv_base_driver`。
 
 ---
 

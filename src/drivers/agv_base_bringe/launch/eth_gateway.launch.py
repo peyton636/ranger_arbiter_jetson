@@ -13,19 +13,20 @@ def generate_launch_description():
             DeclareLaunchArgument("mcu_ip", default_value="192.168.10.30"),
             DeclareLaunchArgument("mcu_port", default_value="50001"),
             DeclareLaunchArgument("tx_rate_hz", default_value="50.0"),
-            DeclareLaunchArgument("uplink_timeout_ms", default_value="1000"),
-            DeclareLaunchArgument("link_down_timeout_ms", default_value="1500"),
-            DeclareLaunchArgument("cmd_timeout_ms", default_value="2000"),
-            DeclareLaunchArgument("cruise_scale", default_value="1.0"),
+            DeclareLaunchArgument("uplink_timeout_ms", default_value="300"),
+            DeclareLaunchArgument("heartbeat_mode_req", default_value="1"),
+            DeclareLaunchArgument("debug_rx_stats_interval_s", default_value="5.0"),
             DeclareLaunchArgument("rx_dispatch_hz", default_value="50.0"),
             DeclareLaunchArgument("time_sync_enable", default_value="true"),
             DeclareLaunchArgument("time_sync_ping_interval_s", default_value="1.0"),
             DeclareLaunchArgument("time_sync_query_interval_s", default_value="10.0"),
-            DeclareLaunchArgument("gps_enable", default_value="true"),
+            DeclareLaunchArgument("time_sync_rtt_warn_ms", default_value="50.0"),
+            DeclareLaunchArgument("reconnect_interval_s", default_value="1.0"),
+            DeclareLaunchArgument("ros_uplink_publish", default_value="true"),
             Node(
                 package="agv_base_driver",
-                executable="agv_base_eth_bringe",
-                name="agv_base_bringe",
+                executable="eth_gateway",
+                name="eth_gateway",
                 output="screen",
                 parameters=[
                     {"bind_ip": LaunchConfiguration("bind_ip")},
@@ -35,7 +36,12 @@ def generate_launch_description():
                     {"mcu_port": LaunchConfiguration("mcu_port")},
                     {"tx_rate_hz": LaunchConfiguration("tx_rate_hz")},
                     {"uplink_timeout_ms": LaunchConfiguration("uplink_timeout_ms")},
-                    {"link_down_timeout_ms": LaunchConfiguration("link_down_timeout_ms")},
+                    {"heartbeat_mode_req": LaunchConfiguration("heartbeat_mode_req")},
+                    {
+                        "debug_rx_stats_interval_s": LaunchConfiguration(
+                            "debug_rx_stats_interval_s"
+                        )
+                    },
                     {"rx_dispatch_hz": LaunchConfiguration("rx_dispatch_hz")},
                     {"time_sync_enable": LaunchConfiguration("time_sync_enable")},
                     {
@@ -48,13 +54,17 @@ def generate_launch_description():
                             "time_sync_query_interval_s"
                         )
                     },
-                    {"cmd_timeout_ms": LaunchConfiguration("cmd_timeout_ms")},
-                    {"cruise_scale": LaunchConfiguration("cruise_scale")},
-                    {"gps_enable": LaunchConfiguration("gps_enable")},
-                    {"ros_uplink_publish": False},
-                    {"ros_link_publish": False},
-                    {"ros_time_sync_publish": False},
-                    {"ros_sensor_cfg_sub": False},
+                    {
+                        "time_sync_rtt_warn_ms": LaunchConfiguration(
+                            "time_sync_rtt_warn_ms"
+                        )
+                    },
+                    {
+                        "reconnect_interval_s": LaunchConfiguration(
+                            "reconnect_interval_s"
+                        )
+                    },
+                    {"ros_uplink_publish": LaunchConfiguration("ros_uplink_publish")},
                 ],
             ),
         ]
