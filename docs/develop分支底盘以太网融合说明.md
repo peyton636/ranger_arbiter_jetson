@@ -33,7 +33,7 @@ agv_base_eth_bringe（单 Python 节点）
        /odom + TF
        /fix（gps_enable=true）
 
-RS232 链路：仍用 C++ agv_base_bringe_node（link_type=rs232）
+RS232 链路：已移除 C++ `agv_base_bringe_node`，统一用 **`agv_base_eth_bringe`**
 Nav2：须发 /agv_control（cmd_vel_compat 已关闭）
 联调旧协议：`agv_base_driver/launch/eth_gateway.launch.py` + `ros_uplink_publish:=true`
 ```
@@ -344,8 +344,7 @@ ros2 node list   # 应为空或只剩你要的节点
 
 | 节点 | 可执行文件 | 链路 | 说明 |
 |------|-----------|------|------|
-| `agv_base_eth_bringe` | Python | **eth** | 生产默认；UDP + 融合 + 4 Topic |
-| `agv_base_bringe_node` | C++ lifecycle | **rs232** 等 | 仍订阅 `/jetson_{link}/*` 或旧参数，eth 链路**勿再使用** |
+| `agv_base_eth_bringe` | Python | **eth** | 生产默认；UDP + 融合 + 4 Topic + /fix |
 
 C++ 节点里曾做过一版 Topic 规范化（订阅 `/agv_control`、发布 `/Vehicle/VehicleData`），以太网已改由 Python 单节点接管。
 
@@ -379,7 +378,6 @@ ros2 daemon stop
 | `agv_base_driver` | `agv_base_eth_bringe` | `agv_base_bringe` | **以太网生产节点**（UDP + 4 Topic + /fix） |
 | `agv_base_driver` | `cmd_vel_gui` | `cmd_vel_gui` | Tk 遥控 GUI → `/agv_control` |
 | `agv_base_driver` | `eth_gateway` | `eth_gateway` | **仅联调**（`ros_uplink_publish:=true`） |
-| `agv_base_driver` | `agv_base_bringe_node` | `agv_base_bringe` | RS232 等 C++ lifecycle 节点 |
 
 主要源码（均在 `src/drivers/agv_base_bringe/`）：
 
