@@ -1,0 +1,18 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>gps_rs232_to_fix</name>
+  <version>0.3.0</version>
+  <description>GPS frames to NavSatFix /fix</description>
+  <maintainer email="rxp@todo.todo">rxp</maintainer>
+  <license>MIT</license>
+
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>jetson_mcu_msgs</exec_depend>
+  <exec_depend>eth_gateway</exec_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

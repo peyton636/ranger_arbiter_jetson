@@ -1,111 +1,57 @@
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, EmitEvent, IncludeLaunchDescription, LogInfo, RegisterEventHandler
-from launch.conditions import IfCondition
-from launch.event_handlers import OnProcessStart
-from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
-from launch_ros.actions import LifecycleNode
-from launch_ros.event_handlers import OnStateTransition
-from launch_ros.events.lifecycle import ChangeState
-from launch_ros.events.lifecycle.matchers import matches_action
-from lifecycle_msgs.msg import Transition
-from ament_index_python.packages import get_package_share_directory
-import os
+from launch_ros.actions import Node
 
 
 def generate_launch_description():
-    eth_gateway_share = get_package_share_directory('eth_gateway')
-    gps_share = get_package_share_directory('gps_rs232_to_fix')
-    autostart = LaunchConfiguration('autostart')
-
-    agv_node = LifecycleNode(
-        package='agv_base_driver',
-        executable='agv_base_bringe_node',
-        name='agv_base_bringe',
-        output='screen',
-        parameters=[
-            {'link_type': 'eth'},
-            {'cmd_timeout_ms': LaunchConfiguration('cmd_timeout_ms')},
-            {'cruise_scale': LaunchConfiguration('cruise_scale')},
-        ],
-    )
-
-    configure_handler = RegisterEventHandler(
-        OnProcessStart(
-            target_action=agv_node,
-            on_start=[
-                LogInfo(msg='Configuring agv_base_bringe'),
-                EmitEvent(
-                    event=ChangeState(
-                        lifecycle_node_matcher=matches_action(agv_node),
-                        transition_id=Transition.TRANSITION_CONFIGURE,
-                    )
-                ),
-            ],
-        ),
-        condition=IfCondition(autostart),
-    )
-
-    activate_handler = RegisterEventHandler(
-        OnStateTransition(
-            target_lifecycle_node=agv_node,
-            goal_state='inactive',
-            entities=[
-                LogInfo(msg='Activating agv_base_bringe'),
-                EmitEvent(
-                    event=ChangeState(
-                        lifecycle_node_matcher=matches_action(agv_node),
-                        transition_id=Transition.TRANSITION_ACTIVATE,
-                    )
-                ),
-            ],
-        ),
-        condition=IfCondition(autostart),
-    )
-
-    return LaunchDescription([
-        DeclareLaunchArgument('bind_ip', default_value='192.168.10.201'),
-        DeclareLaunchArgument('local_port', default_value='50002'),
-        DeclareLaunchArgument('mcu_ip', default_value='192.168.10.30'),
-        DeclareLaunchArgument('mcu_port', default_value='50001'),
-        DeclareLaunchArgument('cmd_timeout_ms', default_value='2000'),
-        DeclareLaunchArgument('cruise_scale', default_value='1.0'),
-        DeclareLaunchArgument('tx_rate_hz', default_value='50.0'),
-        DeclareLaunchArgument('uplink_timeout_ms', default_value='300'),
-        DeclareLaunchArgument('time_sync_enable', default_value='true'),
-        DeclareLaunchArgument('time_sync_ping_interval_s', default_value='1.0'),
-        DeclareLaunchArgument('time_sync_query_interval_s', default_value='10.0'),
-        DeclareLaunchArgument('gps_enable', default_value='true'),
-        DeclareLaunchArgument('gps_fix_topic', default_value='/fix'),
-        DeclareLaunchArgument('autostart', default_value='true'),
-        IncludeLaunchDescription(
-            PythonLaunchDescriptionSource(
-                os.path.join(eth_gateway_share, 'launch', 'eth_gateway.launch.py')
+    return LaunchDescription(
+        [
+            DeclareLaunchArgument("bind_ip", default_value="192.168.10.201"),
+            DeclareLaunchArgument("local_port", default_value="50002"),
+            DeclareLaunchArgument("mcu_ip", default_value="192.168.10.30"),
+            DeclareLaunchArgument("mcu_port", default_value="50001"),
+            DeclareLaunchArgument("tx_rate_hz", default_value="50.0"),
+            DeclareLaunchArgument("uplink_timeout_ms", default_value="300"),
+            DeclareLaunchArgument("cmd_timeout_ms", default_value="2000"),
+            DeclareLaunchArgument("cruise_scale", default_value="1.0"),
+            DeclareLaunchArgument("rx_dispatch_hz", default_value="50.0"),
+            DeclareLaunchArgument("time_sync_enable", default_value="true"),
+            DeclareLaunchArgument("time_sync_ping_interval_s", default_value="1.0"),
+            DeclareLaunchArgument("time_sync_query_interval_s", default_value="10.0"),
+            DeclareLaunchArgument("gps_enable", default_value="true"),
+            Node(
+                package="eth_gateway",
+                executable="agv_base_eth_bringe",
+                name="agv_base_bringe",
+                output="screen",
+                parameters=[
+                    {"bind_ip": LaunchConfiguration("bind_ip")},
+                    {"local_port": LaunchConfiguration("local_port")},
+                    {"mcu_ip": LaunchConfiguration("mcu_ip")},
+                    {"mcu_port": LaunchConfiguration("mcu_port")},
+                    {"tx_rate_hz": LaunchConfiguration("tx_rate_hz")},
+                    {"uplink_timeout_ms": LaunchConfiguration("uplink_timeout_ms")},
+                    {"rx_dispatch_hz": LaunchConfiguration("rx_dispatch_hz")},
+                    {"time_sync_enable": LaunchConfiguration("time_sync_enable")},
+                    {
+                        "time_sync_ping_interval_s": LaunchConfiguration(
+                            "time_sync_ping_interval_s"
+                        )
+                    },
+                    {
+                        "time_sync_query_interval_s": LaunchConfiguration(
+                            "time_sync_query_interval_s"
+                        )
+                    },
+                    {"cmd_timeout_ms": LaunchConfiguration("cmd_timeout_ms")},
+                    {"cruise_scale": LaunchConfiguration("cruise_scale")},
+                    {"gps_enable": LaunchConfiguration("gps_enable")},
+                    {"ros_uplink_publish": False},
+                    {"ros_link_publish": False},
+                    {"ros_time_sync_publish": False},
+                    {"ros_sensor_cfg_sub": False},
+                ],
             ),
-            launch_arguments={
-                'bind_ip': LaunchConfiguration('bind_ip'),
-                'local_port': LaunchConfiguration('local_port'),
-                'mcu_ip': LaunchConfiguration('mcu_ip'),
-                'mcu_port': LaunchConfiguration('mcu_port'),
-                'tx_rate_hz': LaunchConfiguration('tx_rate_hz'),
-                'uplink_timeout_ms': LaunchConfiguration('uplink_timeout_ms'),
-                'time_sync_enable': LaunchConfiguration('time_sync_enable'),
-                'time_sync_ping_interval_s': LaunchConfiguration('time_sync_ping_interval_s'),
-                'time_sync_query_interval_s': LaunchConfiguration('time_sync_query_interval_s'),
-            }.items(),
-        ),
-        agv_node,
-        configure_handler,
-        activate_handler,
-        IncludeLaunchDescription(
-            PythonLaunchDescriptionSource(
-                os.path.join(gps_share, 'launch', 'gps_rs232_to_fix.launch.py')
-            ),
-            launch_arguments={
-                'link_type': 'eth',
-                'fix_topic': LaunchConfiguration('gps_fix_topic'),
-                'use_time_sync_stamp': 'true',
-            }.items(),
-            condition=IfCondition(LaunchConfiguration('gps_enable')),
-        ),
-    ])
+        ]
+    )

@@ -30,6 +30,8 @@
   <exec_depend>jetson_mcu_msgs</exec_depend>
   <exec_depend>scr_sensor</exec_depend>
   <exec_depend>lifecycle_msgs</exec_depend>
+  <exec_depend>eth_gateway</exec_depend>
+  <exec_depend>gps_rs232_to_fix</exec_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

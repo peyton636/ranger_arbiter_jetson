@@ -1,28 +1,28 @@
 agv_base_bringe:
   ros__parameters:
-    # 链路类型：rs232 | eth | can，对应 /jetson_{link_type}/*
-    link_type: "rs232"
+    link_type: "eth"
 
-    # ROS 侧话题
-    cmd_vel_topic: "/cmd_vel"
-    light_cmd_topic: "/agv/light_enable"
-    vehicle_topic: "/vehicle/vehicle_data"
+    # 对外业务 Topic
+    agv_control_topic: "/agv_control"
+    feature_status_topic: "/Function/FeatureStatusInfo"
+    vehicle_topic: "/Vehicle/VehicleData"
     odom_topic: "/odom"
     odom_frame: "odom"
     base_frame: "base_link"
 
-    # 控制频率与超时
-    cmd_rate_hz: 50.0
-    status_timeout_ms: 500      # 上行状态 freshness 窗口
-    cmd_timeout_ms: 500         # cmd_vel 超时 → 1s 零速恢复
+    # Nav2 短期兼容：/cmd_vel → 内部 twist 语义
+    cmd_vel_compat_enable: false
+    cmd_vel_topic: "/cmd_vel"
 
-    # 速度限幅
+    cmd_rate_hz: 50.0
+    status_timeout_ms: 500
+    cmd_timeout_ms: 500
+
     max_linear_m_s: 0.8
     max_angular_rad_s: 1.0
     cruise_scale: 1.0
 
-    # V3 协议
-    mode_req: 1                 # MODE_CAN
+    mode_req: 1
     strafe_jl_from_angular: true
     strafe_speed_m_s: 0.3
-    sideways_steer_millirad: 1571   # ≈ π/2 rad
+    sideways_steer_millirad: 1571

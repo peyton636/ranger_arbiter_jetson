@@ -25,6 +25,12 @@ rclcpp::QoS cmdVelQoS()
   return qos;
 }
 
+/// 兼容 Nav2（volatile）与 GUI（transient_local）的 /agv_control 订阅
+rclcpp::QoS agvControlQoS()
+{
+  return cmdVelQoS();
+}
+
 }  // namespace
 
 AgvBaseBringeNode::AgvBaseBringeNode(const rclcpp::NodeOptions & options)
@@ -35,28 +41,27 @@ AgvBaseBringeNode::AgvBaseBringeNode(const rclcpp::NodeOptions & options)
 
 void AgvBaseBringeNode::declareParameters()
 {
-  // 链路类型，决定订阅/发布的 /jetson_{link_type}/* 前缀
   link_type_ = declare_parameter<std::string>("link_type", "rs232");
+  agv_control_topic_ = declare_parameter<std::string>("agv_control_topic", "/agv_control");
   cmd_vel_topic_ = declare_parameter<std::string>("cmd_vel_topic", "/cmd_vel");
-  light_cmd_topic_ = declare_parameter<std::string>("light_cmd_topic", "/agv/light_enable");
-  vehicle_topic_ = declare_parameter<std::string>("vehicle_topic", "/vehicle/vehicle_data");
+  cmd_vel_compat_enable_ = declare_parameter<bool>("cmd_vel_compat_enable", true);
+  feature_status_topic_ = declare_parameter<std::string>(
+    "feature_status_topic", "/Function/FeatureStatusInfo");
+  vehicle_topic_ = declare_parameter<std::string>("vehicle_topic", "/Vehicle/VehicleData");
   odom_topic_ = declare_parameter<std::string>("odom_topic", "/odom");
   odom_frame_ = declare_parameter<std::string>("odom_frame", "odom");
   base_frame_ = declare_parameter<std::string>("base_frame", "base_link");
 
-  // 下行指令与上行状态发布频率
   cmd_rate_hz_ = declare_parameter<double>("cmd_rate_hz", 50.0);
-  // 超过该时间未收到 v3_status 则 VehicleData.data_valid=false
   status_timeout_s_ =
     declare_parameter<int>("status_timeout_ms", 500) / 1000.0;
-  // 超过该时间未收到 cmd_vel 则进入零速恢复
   cmd_timeout_s_ =
     declare_parameter<int>("cmd_timeout_ms", kCmdTimeoutMs) / 1000.0;
   max_linear_m_s_ = declare_parameter<double>("max_linear_m_s", 0.8);
   max_angular_rad_s_ = declare_parameter<double>("max_angular_rad_s", 1.0);
   cruise_scale_ = declare_parameter<double>("cruise_scale", 1.0);
   mode_req_ = static_cast<uint8_t>(declare_parameter<int>("mode_req", kModeCan));
-  // true：angular.z 触发侧移；false：angular.z 触发原地自旋
+  pending_mode_req_ = mode_req_;
   strafe_jl_from_angular_ = declare_parameter<bool>("strafe_jl_from_angular", true);
   strafe_speed_m_s_ = declare_parameter<double>("strafe_speed_m_s", 0.3);
   sideways_steer_millirad_ =
@@ -66,6 +71,7 @@ void AgvBaseBringeNode::declareParameters()
   command_topic_ = jetson_prefix_ + "/command";
   status_topic_ = jetson_prefix_ + "/v3_status";
   ext_status_topic_ = jetson_prefix_ + "/v3_ext_status";
+  motion_blob_topic_ = jetson_prefix_ + "/blob/motion";
   time_sync_topic_ = jetson_prefix_ + "/time_sync";
 }
 
@@ -77,14 +83,15 @@ AgvBaseBringeNode::on_configure(const rclcpp_lifecycle::State &)
   // configure 阶段创建 publisher，activate 后再订阅与定时器
   command_pub_ = create_publisher<jetson_mcu_msgs::msg::V3Command>(command_topic_, 10);
   vehicle_pub_ = create_publisher<scr_sensor::msg::VehicleData>(vehicle_topic_, 10);
+  feature_pub_ = create_publisher<scr_sensor::msg::AgvFeatureStatus>(feature_status_topic_, 10);
   odom_pub_ = create_publisher<nav_msgs::msg::Odometry>(odom_topic_, 10);
   tf_broadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>(shared_from_this());
 
   RCLCPP_INFO(
     get_logger(),
-    "Configured: link=%s cmd=%s → %s, %s, %s",
-    link_type_.c_str(), cmd_vel_topic_.c_str(), command_topic_.c_str(),
-    vehicle_topic_.c_str(), odom_topic_.c_str());
+    "Configured: link=%s %s → %s | %s, %s, %s",
+    link_type_.c_str(), agv_control_topic_.c_str(), command_topic_.c_str(),
+    vehicle_topic_.c_str(), feature_status_topic_.c_str(), odom_topic_.c_str());
   return CallbackReturn::SUCCESS;
 }
 
@@ -93,19 +100,26 @@ AgvBaseBringeNode::on_activate(const rclcpp_lifecycle::State &)
 {
   RCLCPP_INFO(get_logger(), "Activating AgvBaseBringeNode...");
 
-  // 订阅导航/上层速度指令与 MCU 上行状态
-  cmd_vel_sub_ = create_subscription<geometry_msgs::msg::Twist>(
-    cmd_vel_topic_, cmdVelQoS(),
-    std::bind(&AgvBaseBringeNode::onCmdVel, this, std::placeholders::_1));
-  light_sub_ = create_subscription<std_msgs::msg::Bool>(
-    light_cmd_topic_, 10,
-    std::bind(&AgvBaseBringeNode::onLightCmd, this, std::placeholders::_1));
+  agv_control_sub_ = create_subscription<scr_sensor::msg::AgvControl>(
+    agv_control_topic_, agvControlQoS(),
+    std::bind(&AgvBaseBringeNode::onAgvControl, this, std::placeholders::_1));
+  if (cmd_vel_compat_enable_) {
+    cmd_vel_sub_ = create_subscription<geometry_msgs::msg::Twist>(
+      cmd_vel_topic_, cmdVelQoS(),
+      std::bind(&AgvBaseBringeNode::onCmdVel, this, std::placeholders::_1));
+    RCLCPP_INFO(
+      get_logger(), "cmd_vel 兼容已启用：%s → 内部 AgvControl 语义",
+      cmd_vel_topic_.c_str());
+  }
   status_sub_ = create_subscription<jetson_mcu_msgs::msg::V3Status>(
     status_topic_, 10,
     std::bind(&AgvBaseBringeNode::onStatus, this, std::placeholders::_1));
   ext_sub_ = create_subscription<jetson_mcu_msgs::msg::V3ExtStatus>(
     ext_status_topic_, 10,
     std::bind(&AgvBaseBringeNode::onExtStatus, this, std::placeholders::_1));
+  motion_blob_sub_ = create_subscription<jetson_mcu_msgs::msg::BlobAgvMotion>(
+    motion_blob_topic_, 10,
+    std::bind(&AgvBaseBringeNode::onMotionBlob, this, std::placeholders::_1));
   time_sync_sub_ = create_subscription<jetson_mcu_msgs::msg::TimeSyncResponse>(
     time_sync_topic_, 10,
     std::bind(&AgvBaseBringeNode::onTimeSync, this, std::placeholders::_1));
@@ -130,10 +144,11 @@ AgvBaseBringeNode::on_deactivate(const rclcpp_lifecycle::State &)
   RCLCPP_INFO(get_logger(), "Deactivating AgvBaseBringeNode...");
   cmd_timer_.reset();
   state_timer_.reset();
+  agv_control_sub_.reset();
   cmd_vel_sub_.reset();
-  light_sub_.reset();
   status_sub_.reset();
   ext_sub_.reset();
+  motion_blob_sub_.reset();
   time_sync_sub_.reset();
   return CallbackReturn::SUCCESS;
 }
@@ -144,14 +159,16 @@ AgvBaseBringeNode::on_cleanup(const rclcpp_lifecycle::State &)
   RCLCPP_INFO(get_logger(), "Cleaning up AgvBaseBringeNode...");
   cmd_timer_.reset();
   state_timer_.reset();
+  agv_control_sub_.reset();
   cmd_vel_sub_.reset();
-  light_sub_.reset();
   status_sub_.reset();
   ext_sub_.reset();
+  motion_blob_sub_.reset();
   time_sync_sub_.reset();
 
   command_pub_.reset();
   vehicle_pub_.reset();
+  feature_pub_.reset();
   odom_pub_.reset();
   tf_broadcaster_.reset();
 
@@ -184,13 +201,74 @@ double AgvBaseBringeNode::steadyNowSec()
   return std::chrono::duration<double>(now).count();
 }
 
+void AgvBaseBringeNode::applyMotionCommand(const MotionCommand & motion)
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  pending_v_mm_s_ = motion.v_mm_s;
+  pending_omega_ = motion.omega_millirad_s;
+  pending_steer_ = motion.steer_millirad;
+  pending_motion_model_ = motion.motion_model;
+  last_cmd_time_ = steadyNowSec();
+
+  if (motion.v_mm_s != 0 || motion.omega_millirad_s != 0 || motion.steer_millirad != 0) {
+    last_motion_v_mm_s_ = pending_v_mm_s_;
+    last_motion_omega_ = pending_omega_;
+    last_motion_steer_ = pending_steer_;
+  }
+}
+
+void AgvBaseBringeNode::applyAgvControlFields(const scr_sensor::msg::AgvControl & msg)
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  pending_mode_req_ = msg.mode_req;
+  light_enable_ = msg.light_enable != 0 ? msg.light_enable : 1;
+  light_mode_ = msg.light_mode;
+  if (msg.clear_error != 0) {
+    pending_clear_error_ = msg.clear_error;
+  }
+}
+
+void AgvBaseBringeNode::onAgvControl(const scr_sensor::msg::AgvControl::SharedPtr msg)
+{
+  if (!msg) {
+    return;
+  }
+
+  applyAgvControlFields(*msg);
+
+  MotionCommand motion;
+  if (msg->use_twist_input) {
+    double lx = msg->linear_x * cruise_scale_;
+    double ly = msg->linear_y * cruise_scale_;
+    double az = msg->angular_z * cruise_scale_;
+    lx = std::clamp(lx, -max_linear_m_s_, max_linear_m_s_);
+    ly = std::clamp(ly, -max_linear_m_s_, max_linear_m_s_);
+    az = std::clamp(az, -max_angular_rad_s_, max_angular_rad_s_);
+    motion = twistToMotion(
+      lx, ly, az, strafe_jl_from_angular_, strafe_speed_m_s_, sideways_steer_millirad_);
+  } else {
+    motion.v_mm_s = msg->v_mm_s;
+    motion.omega_millirad_s = msg->omega_millirad_s;
+    motion.steer_millirad = msg->steer_millirad;
+    motion.motion_model = msg->motion_model;
+  }
+
+  applyMotionCommand(motion);
+
+  if (motion.v_mm_s != 0 || motion.omega_millirad_s != 0 || motion.steer_millirad != 0) {
+    RCLCPP_INFO_THROTTLE(
+      get_logger(), *get_clock(), 2000,
+      "agv_control → v=%d mm/s omega=%d steer=%d",
+      motion.v_mm_s, motion.omega_millirad_s, motion.steer_millirad);
+  }
+}
+
 void AgvBaseBringeNode::onCmdVel(const geometry_msgs::msg::Twist::SharedPtr msg)
 {
   if (!msg) {
     return;
   }
 
-  // 缩放 + 限幅后映射为 V3 运动指令
   double lx = msg->linear.x * cruise_scale_;
   double ly = msg->linear.y * cruise_scale_;
   double az = msg->angular.z * cruise_scale_;
@@ -200,40 +278,25 @@ void AgvBaseBringeNode::onCmdVel(const geometry_msgs::msg::Twist::SharedPtr msg)
 
   const auto motion = twistToMotion(
     lx, ly, az, strafe_jl_from_angular_, strafe_speed_m_s_, sideways_steer_millirad_);
-
-  {
-    std::lock_guard<std::mutex> lock(mutex_);
-    pending_v_mm_s_ = motion.v_mm_s;
-    pending_omega_ = motion.omega_millirad_s;
-    pending_steer_ = motion.steer_millirad;
-    pending_motion_model_ = motion.motion_model;
-    last_cmd_time_ = steadyNowSec();
-  }
+  applyMotionCommand(motion);
 
   if (motion.v_mm_s != 0 || motion.omega_millirad_s != 0 || motion.steer_millirad != 0) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    last_motion_v_mm_s_ = pending_v_mm_s_;
-    last_motion_omega_ = pending_omega_;
-    last_motion_steer_ = pending_steer_;
     RCLCPP_INFO_THROTTLE(
       get_logger(), *get_clock(), 2000,
-      "cmd_vel → v=%d mm/s omega=%d steer=%d",
-      pending_v_mm_s_, pending_omega_, pending_steer_);
+      "cmd_vel(compat) → v=%d mm/s omega=%d steer=%d",
+      motion.v_mm_s, motion.omega_millirad_s, motion.steer_millirad);
   }
 }
 
-void AgvBaseBringeNode::onLightCmd(const std_msgs::msg::Bool::SharedPtr msg)
+void AgvBaseBringeNode::onMotionBlob(
+  const jetson_mcu_msgs::msg::BlobAgvMotion::SharedPtr msg)
 {
   if (!msg) {
     return;
   }
-  // MCU 可能忽略 light_enable=0；保持 enable=1，仅用 mode 区分开/关
   std::lock_guard<std::mutex> lock(mutex_);
-  light_enable_ = 1;
-  light_mode_ = msg->data ? 1 : 0;
-  RCLCPP_INFO(
-    get_logger(), "light %s: enable=%u mode=%u",
-    light_mode_ ? "ON" : "OFF", light_enable_, light_mode_);
+  latest_motion_ = *msg;
+  has_motion_blob_ = true;
 }
 
 void AgvBaseBringeNode::onStatus(const jetson_mcu_msgs::msg::V3Status::SharedPtr msg)
@@ -322,7 +385,7 @@ AgvBaseBringeNode::ResolvedMotion AgvBaseBringeNode::resolveMotion()
       startRecovery();
       recover_until = recover_until_;
       RCLCPP_WARN_THROTTLE(
-        get_logger(), *get_clock(), 2000, "cmd_vel 超时，进入 1s 零速恢复");
+        get_logger(), *get_clock(), 2000, "控制指令超时，进入 1s 零速恢复");
     }
   }
 
@@ -340,7 +403,7 @@ AgvBaseBringeNode::ResolvedMotion AgvBaseBringeNode::resolveMotion()
         last_motion_omega_ = 0;
         last_motion_steer_ = 0;
       } else {
-        RCLCPP_INFO(get_logger(), "恢复完成，继续执行 cmd_vel");
+        RCLCPP_INFO(get_logger(), "恢复完成，继续执行控制指令");
       }
     }
     out.mode = "RECOVER";
@@ -372,27 +435,31 @@ void AgvBaseBringeNode::publishCommand()
   bool offset_valid = false;
   uint8_t light_enable = 1;
   uint8_t light_mode = 0;
+  uint8_t mode_req = mode_req_;
+  uint8_t clear_error = 0;
   {
     std::lock_guard<std::mutex> lock(mutex_);
     offset_ms = offset_ms_;
     offset_valid = offset_valid_;
     light_enable = light_enable_;
     light_mode = light_mode_;
+    mode_req = pending_mode_req_;
+    clear_error = pending_clear_error_;
+    pending_clear_error_ = 0;
   }
 
   jetson_mcu_msgs::msg::V3Command msg;
-  // 下行帧 stamp 走 MCU 虚拟时间轴，与网关/BLOB 对齐
   msg.header.stamp = mcuVirtualToRosStamp(offset_ms, offset_valid, *get_clock());
   msg.header.frame_id = base_frame_;
   msg.seq = 0;
-  msg.mode_req = mode_req_;
+  msg.mode_req = mode_req;
   msg.v_mm_s = motion.v_mm_s;
   msg.omega_millirad_s = motion.omega_millirad_s;
   msg.steer_millirad = motion.steer_millirad;
   msg.motion_model = motion.motion_model;
   msg.light_enable = light_enable;
   msg.light_mode = light_mode;
-  msg.clear_error = 0;
+  msg.clear_error = clear_error;
   command_pub_->publish(msg);
 }
 
@@ -410,9 +477,6 @@ std::optional<scr_sensor::msg::VehicleData> AgvBaseBringeNode::buildVehicleData(
   msg.linear_velocity_mm_s = s.fb_v_mm_s;
   msg.angular_velocity_millirad_s = s.fb_omega_millirad_s;
   msg.steer_millirad = s.fb_steer_millirad;
-  msg.safety_state = s.safety_state;
-  msg.limit_factor = s.limit_factor;
-  msg.link_state = s.link_state;
   msg.sonar_front_mm = s.sonar_front_mm;
   msg.sonar_back_mm = s.sonar_back_mm;
   msg.sonar_left_mm = s.sonar_left_mm;
@@ -432,6 +496,43 @@ std::optional<scr_sensor::msg::VehicleData> AgvBaseBringeNode::buildVehicleData(
     msg.motor_temp_max_c = e.motor_temp_max_c;
     msg.driver_state_or = e.driver_state_or;
     msg.v3_ext_status_seq = e.seq;
+  }
+  return msg;
+}
+
+std::optional<scr_sensor::msg::AgvFeatureStatus> AgvBaseBringeNode::buildFeatureStatus() const
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (!has_status_) {
+    return std::nullopt;
+  }
+
+  const auto & s = latest_status_;
+  scr_sensor::msg::AgvFeatureStatus msg;
+  msg.header = s.header;
+  msg.safety_state = s.safety_state;
+  msg.link_state = s.link_state;
+  msg.limit_factor = s.limit_factor;
+  msg.v3_status_seq = s.seq;
+  msg.data_valid = (steadyNowSec() - last_status_time_) <= status_timeout_s_;
+
+  if (has_motion_blob_) {
+    msg.motion_model = latest_motion_.motion_info;
+    msg.fault_code = latest_motion_.fault_code;
+  } else {
+    msg.fault_code = 0;
+    const int abs_steer = std::abs(s.fb_steer_millirad);
+    const int abs_omega = std::abs(s.fb_omega_millirad_s);
+    const int abs_v = std::abs(s.fb_v_mm_s);
+    if (abs_steer >= 800) {
+      msg.motion_model = jetson_mcu_msgs::msg::V3Command::MOTION_SIDEWAYS;
+    } else if (abs_omega >= 25 && abs_v < 15) {
+      msg.motion_model = jetson_mcu_msgs::msg::V3Command::MOTION_SPIN;
+    } else if (abs_v < 15 && abs_omega < 25) {
+      msg.motion_model = jetson_mcu_msgs::msg::V3Command::MOTION_PARK;
+    } else {
+      msg.motion_model = jetson_mcu_msgs::msg::V3Command::MOTION_ACKERMANN;
+    }
   }
   return msg;
 }
@@ -472,6 +573,13 @@ void AgvBaseBringeNode::publishState()
 
   const auto vehicle = *vehicle_opt;
   vehicle_pub_->publish(vehicle);
+
+  if (feature_pub_) {
+    const auto feature_opt = buildFeatureStatus();
+    if (feature_opt.has_value()) {
+      feature_pub_->publish(*feature_opt);
+    }
+  }
 
   if (vehicle.data_valid) {
     integrateOdom(vehicle.linear_velocity_mm_s, vehicle.angular_velocity_millirad_s);
